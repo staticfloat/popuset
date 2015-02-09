@@ -214,16 +214,23 @@ void initData( void ) {
 
 void initZMQ( void ) {
     zmq_ctx = zmq_ctx_new();
-    sock = zmq_socket(zmq_ctx, ZMQ_PAIR);
-    int conflate = 1;
-    zmq_setsockopt(sock, ZMQ_CONFLATE, &conflate, sizeof(int));
     if( opts.remote_address == NULL ) {
         // We're a listening socket
+        sock = zmq_socket(zmq_ctx, ZMQ_PULL);
+        int hwm = 5;
+        zmq_setsockopt(sock, ZMQ_RCVHWM, &hwm, sizeof(int));
+        zmq_setsockopt(sock, ZMQ_SNDHWM, &hwm, sizeof(int));
+
         char bind_addr[14];
         snprintf(bind_addr, 14, "tcp://*:%d", opts.port);
         zmq_bind( sock, bind_addr);
     } else {
         // We're a connecting socket
+        sock = zmq_socket(zmq_ctx, ZMQ_PUSH);
+        int hwm = 5;
+        zmq_setsockopt(sock, ZMQ_RCVHWM, &hwm, sizeof(int));
+        zmq_setsockopt(sock, ZMQ_SNDHWM, &hwm, sizeof(int));
+
         char connect_addr[128];
         snprintf(connect_addr, 128, "tcp://%s:%d", opts.remote_address, opts.port);
         zmq_connect( sock, connect_addr );
