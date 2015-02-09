@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <signal.h>
+#include <sys/resource.h>
 #include <getopt.h>
 #include <math.h>
 #include <ctype.h>
@@ -317,8 +318,9 @@ int main( int argc, char ** argv ) {
     if (stream == NULL)
         return 1;
 
-    // Setup CTRL-C signal handler
+    // Setup CTRL-C signal handler and make ourselves feel important
     signal(SIGINT, sigint_handler);
+    setpriority(PRIO_PROCESS, 0, -10);
 
     printf("Use CTRL-C to gracefully shutdown...\n");
     while( shouldRun ) {
