@@ -225,6 +225,9 @@ void initZMQ( void ) {
         snprintf(connect_addr, 128, "tcp://%s:%d", opts.remote_address, opts.port);
         zmq_connect( sock, connect_addr );
     }
+
+    int conflate = 1;
+    zmq_setsockopt(sock, ZMQ_CONFLATE, &conflate, sizeof(int));
 }
 
 bool initOpus( void ) {
@@ -281,6 +284,14 @@ void sigint_handler(int dummy=0) {
     signal(SIGINT, SIG_DFL);
 }
 
+bool is_silence( void ) {
+    for( int i=0; i<FRAMES_PER_BUFFER*opts.num_channels; ++i ) {
+        if( buffer[i] != 0.0f )
+            return false;
+    }
+    return true;
+}
+
 int main( int argc, char ** argv ) {
     if (Pa_Initialize() != paNoError) {
         fprintf(stderr, "Error: Could not initialize PortAudio.\n");
@@ -324,8 +335,14 @@ int main( int argc, char ** argv ) {
         } else {
             // If we're a talking kind of guy, then TALK FOR HEAVEN'S SAKE!
             Pa_ReadStream( stream, buffer, FRAMES_PER_BUFFER );
+
+            // We need to keep on encoding so that encoder state doesn't get confused.  :/
             int data_len = opus_encode_float( encoder, buffer, FRAMES_PER_BUFFER, encoded_data, MAX_DATA_PACKET_LEN );
-            zmq_send(sock, encoded_data, data_len, ZMQ_DONTWAIT);
+
+            // But only actually send this stuff if we've got something to say!
+            if( !is_silence() ) {
+                zmq_send(sock, encoded_data, data_len, ZMQ_DONTWAIT);
+            }
         }
     }
     zmq_close(sock);
