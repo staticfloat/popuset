@@ -4,6 +4,7 @@
 #include <opus/opus.h>
 #include <string.h>
 #include <stdlib.h>
+#include <signal.h>
 #include <getopt.h>
 #include <math.h>
 #include <ctype.h>
@@ -53,16 +54,18 @@ void printUsage(char * prog_name) {
     const PaDeviceInfo * di;
     for( int i=0; i<numDevices; i++ ) {
         di = Pa_GetDeviceInfo(i);
-        printf( "[%d] %-22s -> [%2d in, %2d out]  (latency: %4.0fms)  ",
+        printf( "[%2d] %-27s -> [%2d in, %2d out]  (latency: %4.0fms)  ",
                 i, di->name, di->maxInputChannels, di->maxOutputChannels,
                 fmax(di->defaultLowInputLatency, di->defaultLowOutputLatency)*1000);
 
         if( i == default_input && i == default_output )
             printf("[default in/out]");
-        if( i == default_input )
-            printf("[default in]");
-        if( i == default_output )
-            printf("[default out]");
+        else {
+            if( i == default_input )
+                printf("[default in]");
+            if( i == default_output )
+                printf("[default out]");
+        }
         printf("\n");
     }
     exit(0);
@@ -95,7 +98,7 @@ int getDeviceId( const char * name ) {
     return -1;
 }
 
-struct {
+struct opts_struct {
     int device_id;
     const char * device_name;
     int num_channels;
