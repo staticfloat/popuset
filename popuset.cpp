@@ -215,6 +215,8 @@ void initData( void ) {
 void initZMQ( void ) {
     zmq_ctx = zmq_ctx_new();
     sock = zmq_socket(zmq_ctx, ZMQ_PAIR);
+    int conflate = 1;
+    zmq_setsockopt(sock, ZMQ_CONFLATE, &conflate, sizeof(int));
     if( opts.remote_address == NULL ) {
         // We're a listening socket
         char bind_addr[14];
@@ -226,9 +228,6 @@ void initZMQ( void ) {
         snprintf(connect_addr, 128, "tcp://%s:%d", opts.remote_address, opts.port);
         zmq_connect( sock, connect_addr );
     }
-
-    int conflate = 1;
-    zmq_setsockopt(sock, ZMQ_CONFLATE, &conflate, sizeof(int));
 }
 
 bool initOpus( void ) {
