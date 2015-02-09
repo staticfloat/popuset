@@ -25,6 +25,7 @@ unsigned char * encoded_data;
 
 // Flag used to signify when we should bail out of main loop
 bool shouldRun = true;
+bool lastBufferSilent = false;
 
 // Our zmq context object and socket object
 void * zmq_ctx;
@@ -214,23 +215,27 @@ void initData( void ) {
 
 void initZMQ( void ) {
     zmq_ctx = zmq_ctx_new();
+    int sock_type;
+    if( opts.remote_address == NULL )
+        sock_type = ZMQ_PULL;
+    else
+        sock_type = ZMQ_PUSH;
+
+    // Create socket and set common options
+    sock = zmq_socket(zmq_ctx, sock_type);
+    int hwm = 5;
+    zmq_setsockopt(sock, ZMQ_RCVHWM, &hwm, sizeof(int));
+    zmq_setsockopt(sock, ZMQ_SNDHWM, &hwm, sizeof(int));
+    int linger = 0;
+    zmq_setsockopt(sock, ZMQ_LINGER, &linger, sizeof(int));
+
     if( opts.remote_address == NULL ) {
         // We're a listening socket
-        sock = zmq_socket(zmq_ctx, ZMQ_PULL);
-        int hwm = 5;
-        zmq_setsockopt(sock, ZMQ_RCVHWM, &hwm, sizeof(int));
-        zmq_setsockopt(sock, ZMQ_SNDHWM, &hwm, sizeof(int));
-
         char bind_addr[14];
         snprintf(bind_addr, 14, "tcp://*:%d", opts.port);
         zmq_bind( sock, bind_addr);
     } else {
         // We're a connecting socket
-        sock = zmq_socket(zmq_ctx, ZMQ_PUSH);
-        int hwm = 5;
-        zmq_setsockopt(sock, ZMQ_RCVHWM, &hwm, sizeof(int));
-        zmq_setsockopt(sock, ZMQ_SNDHWM, &hwm, sizeof(int));
-
         char connect_addr[128];
         snprintf(connect_addr, 128, "tcp://%s:%d", opts.remote_address, opts.port);
         zmq_connect( sock, connect_addr );
@@ -287,7 +292,8 @@ PaStream * openAudio( void ) {
 
 void sigint_handler(int dummy=0) {
     shouldRun = false;
-    // Undo our signal handling here
+    zmq_close(sock);
+    // Undo our signal handling here, so mashing CTRL-C will definitely kill us
     signal(SIGINT, SIG_DFL);
 }
 
@@ -326,8 +332,8 @@ int main( int argc, char ** argv ) {
 
     // Setup CTRL-C signal handler and make ourselves feel important
     signal(SIGINT, sigint_handler);
-    setpriority(PRIO_PROCESS, 0, -10);
 
+    // Start the long haul loop
     printf("Use CTRL-C to gracefully shutdown...\n");
     while( shouldRun ) {
         if( opts.remote_address == NULL ) {
@@ -335,22 +341,23 @@ int main( int argc, char ** argv ) {
             int data_len = zmq_recv(sock, (char *)encoded_data, MAX_DATA_PACKET_LEN, 0 );
             if( data_len > 0 ) {
                 int dec_len = opus_decode_float( decoder, encoded_data, data_len, buffer, FRAMES_PER_BUFFER, 0 );
-                if( dec_len != FRAMES_PER_BUFFER ) {
-                    fprintf(stderr, "WARNING: dec_len (%d) != %d\n", dec_len, FRAMES_PER_BUFFER);
-                }
                 Pa_WriteStream( stream, buffer, FRAMES_PER_BUFFER );
             }
         } else {
             // If we're a talking kind of guy, then TALK FOR HEAVEN'S SAKE!
             Pa_ReadStream( stream, buffer, FRAMES_PER_BUFFER );
 
-            // We need to keep on encoding so that encoder state doesn't get confused.  :/
-            int data_len = opus_encode_float( encoder, buffer, FRAMES_PER_BUFFER, encoded_data, MAX_DATA_PACKET_LEN );
+            // Check to make sure we've got something to say
+            bool thisBufferSilent = is_silence();
 
-            // But only actually send this stuff if we've got something to say!
-            if( !is_silence() ) {
+            // Only send something if we've got something to say.  We need to process at least one
+            // buffer of complete silence before stopping so that our encoder doesn't see discontinuities
+            if( thisBufferSilent && lastBufferSilent ) {
+                int data_len = opus_encode_float( encoder, buffer, FRAMES_PER_BUFFER, encoded_data, MAX_DATA_PACKET_LEN );
                 zmq_send(sock, encoded_data, data_len, ZMQ_DONTWAIT);
             }
+
+            lastBufferSilent = thisBufferSilent;
         }
     }
     zmq_close(sock);
