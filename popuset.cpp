@@ -345,6 +345,7 @@ int main( int argc, char ** argv ) {
 
     // Setup CTRL-C signal handler and make ourselves feel important
     signal(SIGINT, sigint_handler);
+    setpriority(PRIO_PROCESS, 0, -10);
 
     // Start the long haul loop
     printf("Use CTRL-C to gracefully shutdown...\n");
@@ -365,7 +366,7 @@ int main( int argc, char ** argv ) {
 
             // Only send something if we've got something to say.  We need to process at least one
             // buffer of complete silence before stopping so that our encoder doesn't see discontinuities
-            if( thisBufferSilent && lastBufferSilent ) {
+            if( !(thisBufferSilent && lastBufferSilent) ) {
                 int data_len = opus_encode_float( encoder, buffer, FRAMES_PER_BUFFER, encoded_data, MAX_DATA_PACKET_LEN );
                 zmq_send(sock, encoded_data, data_len, ZMQ_DONTWAIT);
             }
