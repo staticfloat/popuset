@@ -31,19 +31,31 @@ bool lastBufferSilent = false;
 void * zmq_ctx;
 void * sock;
 
+const char * formatSeconds(float seconds) {
+    if( seconds < 0.001f )
+        return "  0s";
+
+    static char buff[32];
+    if( seconds < 1.0f )
+        sprintf(buff, "%3dms", (int)(seconds*1000));
+    else
+        sprintf(buff, "%.1fs", seconds);
+    return (const char *)buff;
+}
+
 
 void printUsage(char * prog_name) {
     int default_input = Pa_GetDefaultInputDevice();
     int default_output = Pa_GetDefaultOutputDevice();
 
     printf("Usage: %s <options> where options is zero or more of:\n", prog_name);
-    printf("\t--device/-d:   The device name/ID you wish to capture from/output to.\n");
-    printf("\t--channels/-c: The number of channels to limit capture/playback to.\n");
-    printf("\t--remote/-r:   The address of the remote server to send captured audio to.\n");
-    printf("\t--port/-p:     The port you wish to listen on/connect to.\n");
+    printf("\t--device/-d:   Device name/ID you wish to capture from/output to.\n");
+    printf("\t--channels/-c: Number of channels to limit capture/playback to.\n");
+    printf("\t--remote/-r:   Address of the remote server to send captured audio to.\n");
+    printf("\t--port/-p:     Port you wish to listen on/connect to.\n");
     printf("\t--help/-h:     Print this help message, along with a device listing.\n\n");
 
-    printf("Default behavior is to listen on port 5040, sending to default output with max channels:\n");
+    printf("Default is to listen on port 5040, sending to default output with max channels:\n");
     printf("\t%s -p 5040 -d \"%s\" -c %d\n\n", prog_name, Pa_GetDeviceInfo(default_output)->name, Pa_GetDeviceInfo(default_output)->maxOutputChannels );
     
     printf("Device listing:\n");
@@ -56,17 +68,17 @@ void printUsage(char * prog_name) {
     const PaDeviceInfo * di;
     for( int i=0; i<numDevices; i++ ) {
         di = Pa_GetDeviceInfo(i);
-        printf( "[%2d] %-27s -> [%2d in, %2d out]  (latency: %4.0fms)  ",
+        printf( "[%2d] %-33.33s -> [%3d in, %3d out] (latency: %s) ",
                 i, di->name, di->maxInputChannels, di->maxOutputChannels,
-                fmax(di->defaultLowInputLatency, di->defaultLowOutputLatency)*1000);
+                formatSeconds(fmax(di->defaultLowInputLatency, di->defaultLowOutputLatency)));
 
         if( i == default_input && i == default_output )
-            printf("[default in/out]");
+            printf("<>");
         else {
             if( i == default_input )
-                printf("[default in]");
+                printf("<");
             if( i == default_output )
-                printf("[default out]");
+                printf(">");
         }
         printf("\n");
     }
@@ -325,7 +337,8 @@ int main( int argc, char ** argv ) {
 
     initZMQ();
     initData();
-    initOpus();
+    if( !initOpus() )
+        return 1;
     PaStream * stream = openAudio();
     if (stream == NULL)
         return 1;
