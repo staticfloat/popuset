@@ -10,6 +10,7 @@
 #include <math.h>
 #include <ctype.h>
 #include <zmq.h>
+#include <unistd.h>
 
 #define SAMPLE_RATE         48000
 #define FRAMES_PER_BUFFER   (int)(10*(SAMPLE_RATE/1000))
@@ -349,15 +350,24 @@ int main( int argc, char ** argv ) {
 
     // Start the long haul loop
     printf("Use CTRL-C to gracefully shutdown...\n");
-    while( shouldRun ) {
-        if( opts.remote_address == NULL ) {
-            // If we're a listening kind of guy, listen for audio!
+    
+    if( opts.remote_address == NULL ) {
+        while( shouldRun ) {
+            // If we're a listening kind of guy, listen for aqudio!
             int data_len = zmq_recv(sock, (char *)encoded_data, MAX_DATA_PACKET_LEN, 0 );
             if( data_len > 0 ) {
                 int dec_len = opus_decode_float( decoder, encoded_data, data_len, buffer, FRAMES_PER_BUFFER, 0 );
-                Pa_WriteStream( stream, buffer, FRAMES_PER_BUFFER );
+                PaError err = Pa_WriteStream( stream, buffer, FRAMES_PER_BUFFER );
+
+                // If we underflow, then sleep for a millisecond so that we have a chance to get moar buffers
+                if( err == paOutputUnderflowed ) {
+                    printf( "." );
+                    usleep(1000);
+                }
             }
-        } else {
+        }
+    } else {
+        while( shouldRun ) {
             // If we're a talking kind of guy, then TALK FOR HEAVEN'S SAKE!
             Pa_ReadStream( stream, buffer, FRAMES_PER_BUFFER );
 
