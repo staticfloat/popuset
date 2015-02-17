@@ -1,5 +1,5 @@
 CC=g++
-CFLAGS=-O3 -march=native -mtune=native
+CFLAGS=-O3
 LDFLAGS=-lportaudio -lopus -lzmq
 
 all:
