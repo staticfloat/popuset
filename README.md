@@ -8,6 +8,11 @@ Make sure you have `libportaudio`, `libzmq` and `libopus` installed.  For exampl
 $ brew install portaudio zmq opus
 ```
 
+On Debian-based systems run:
+```
+$ sudo apt-get install portaudio19-dev libzmq3-dev libopus-dev
+```
+
 Then, checkout the sources and run `make` inside the source directory.
 
 
