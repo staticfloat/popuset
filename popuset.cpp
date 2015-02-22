@@ -12,12 +12,21 @@
 #include <zmq.h>
 #include <unistd.h>
 
+// These are things that maybe should probably be changed to be configurable maybe probably
 #define SAMPLE_RATE         48000
-#define FRAMES_PER_BUFFER   (int)(10*(SAMPLE_RATE/1000))
+#define RING_BUFFER_LEN     (10*opts.bframes*opts.num_channels)
 #define MAX_DATA_PACKET_LEN 1500
 
-// Recording/playback buffer
-float * buffer;
+// Recording/playback ring buffer.  The ring buffer will always have readIdx <= writeIdx.
+// If writeIdx does not move, readIdx will not exceed it. writeIdx similarly will not wrap
+// all the way back around to readIdx; it will wait patiently one buffer behind so as not
+// to create an ambiguity by lapping
+float * ringBuffer;
+int readIdx, writeIdx;
+
+// I can't believe I'm actually dedicating global memory to niceties like this
+float * peak_levels;
+int packet_count = 0;
 
 // Encoder/decoder objects
 OpusEncoder * encoder;
@@ -54,10 +63,12 @@ void printUsage(char * prog_name) {
     printf("\t--channels/-c: Number of channels to limit capture/playback to.\n");
     printf("\t--remote/-r:   Address of the remote server to send captured audio to.\n");
     printf("\t--port/-p:     Port you wish to listen on/connect to.\n");
+    printf("\t--bufflen/-b:  Length of transmission buffers in milliseconds.\n");
+    printf("\t               Must be one of 2.5, 5, 10, 20, 40, 60 or 120.\n");
     printf("\t--help/-h:     Print this help message, along with a device listing.\n\n");
 
-    printf("Default is to listen on port 5040, sending to default output with max channels:\n");
-    printf("\t%s -p 5040 -d \"%s\" -c %d\n\n", prog_name, Pa_GetDeviceInfo(default_output)->name, Pa_GetDeviceInfo(default_output)->maxOutputChannels );
+    printf("Default: listen, port 5040, 10ms buffers, default output, two channels:\n");
+    printf("\t%s -p 5040 -d \"%s\" -b 10 -c %d\n\n", prog_name, Pa_GetDeviceInfo(default_output)->name, Pa_GetDeviceInfo(default_output)->maxOutputChannels );
     
     printf("Device listing:\n");
     int numDevices = Pa_GetDeviceCount();
@@ -113,12 +124,22 @@ int getDeviceId( const char * name ) {
     return -1;
 }
 
+// This structure stores the user-configurable options
 struct opts_struct {
+    // Which device we're reading from/writing to (integer index)
     int device_id;
+    // Which device we're reading from/writing to (string name)
     const char * device_name;
+    // How many channels we read/write  (Note this is limited by opus)
     int num_channels;
+    // If we are a client, what's the remote server we connect to?
     const char * remote_address;
+    // What port do we do all our business on?
     int port;
+    // How many miliseconds of audio do we send in a buffer?
+    float bufflen;
+    // How many frames of audio do we send in a bufffer?
+    int bframes;
 } opts;
 
 void parseOptions( int argc, char ** argv ) {
@@ -128,6 +149,7 @@ void parseOptions( int argc, char ** argv ) {
         {"remote", required_argument, 0, 'r'},
         {"port", required_argument, 0, 'p'},
         {"help", no_argument, 0, 'h'},
+        {"bufflen", required_argument, 0, 'b'},
         {0, 0, 0, 0}
     };
 
@@ -136,11 +158,12 @@ void parseOptions( int argc, char ** argv ) {
     opts.device_id = -1;
     opts.num_channels = -1;
     opts.remote_address = NULL;
+    opts.bufflen = 10.0f;
     opts.port = -1;
 
     int option_index = 0;
     int c;
-    while( (c = getopt_long( argc, argv, "d:c:r:p:lh", long_options, &option_index)) != -1 ) {
+    while( (c = getopt_long( argc, argv, "d:c:r:p:b:lh", long_options, &option_index)) != -1 ) {
         switch( c ) {
             case 'd':
                 if( is_number(optarg) ) {
@@ -156,7 +179,8 @@ void parseOptions( int argc, char ** argv ) {
             case 'c':
                 opts.num_channels = atoi(optarg);
                 if( opts.num_channels == 0 ) {
-                    fprintf(stderr, "ERROR: Invalid number of channels (%d)!", opts.num_channels);
+                    fprintf(stderr, "ERROR: Invalid number of channels (%d)!\n", opts.num_channels);
+                    exit(1);
                 }
                 break;
             case 'r':
@@ -164,6 +188,14 @@ void parseOptions( int argc, char ** argv ) {
                 break;
             case 'p':
                 opts.port = atoi(optarg);
+                break;
+            case 'b':
+                opts.bufflen = atof(optarg);
+                if( opts.bufflen != 2.5f && opts.bufflen != 5.0f && opts.bufflen != 10.0f &&
+                    opts.bufflen != 20.0f && opts.bufflen != 40.0f && opts.bufflen != 60.0f) {
+                    fprintf(stderr, "ERROR: Buffer length must be one of [2.5, 5, 10, 20, 40 60] milliseconds!\n");
+                    exit(1);
+                }
                 break;
             case 'h':
                 printUsage(argv[0]);
@@ -204,6 +236,9 @@ void parseOptions( int argc, char ** argv ) {
         fprintf(stderr, "ERROR: Device \"%s\" (%d) has no suitable channels!\n", opts.device_name, opts.device_id );
         exit(1);
     }
+    
+    // Calculate how many frames per buffer we're gonna be sending
+    opts.bframes = (opts.bufflen * SAMPLE_RATE)/1000;
 
     if( optind < argc ) {
         printf("Unrecognized extra arguments: ");
@@ -216,14 +251,22 @@ void parseOptions( int argc, char ** argv ) {
 
 
 
-// Initialize our threading semaphores
+// Initialize our data stuffage
 void initData( void ) {
-    //sema_init(&sema, 0);
+    // Initialize 3 buffers worth of audio space for our ring buffer
+    ringBuffer = (float *) malloc(RING_BUFFER_LEN*sizeof(float));
+    memset(ringBuffer, 0, RING_BUFFER_LEN*sizeof(float));
 
-    buffer = (float *) malloc(FRAMES_PER_BUFFER*opts.num_channels*sizeof(float));
-    memset(buffer, 0, FRAMES_PER_BUFFER*opts.num_channels*sizeof(float));
+    // Start off our ring buffer indices
+    readIdx = 0;
+    writeIdx = 0;
+
+    // Initialize encoded data buffer
     encoded_data = (unsigned char *) malloc(MAX_DATA_PACKET_LEN);
     memset(encoded_data, 0, MAX_DATA_PACKET_LEN);
+
+    // Initialize peak levels holders
+    peak_levels = (float *)malloc(sizeof(float)*opts.num_channels);
 }
 
 void initZMQ( void ) {
@@ -273,6 +316,90 @@ bool initOpus( void ) {
     return true;
 }
 
+
+// Only return true if readIndex is at least num_samples ahead of writeIndex
+bool ringBufferWritable(int num_samples ) {
+    int readIdx_adjusted = readIdx;
+    // Note that this is <= because if the two indexes are equal, we can write!
+    if( readIdx_adjusted <= writeIdx )
+        readIdx_adjusted += RING_BUFFER_LEN;
+
+    return readIdx_adjusted - writeIdx > num_samples;
+}
+
+// Only return true if writeIndex is at least num_samples ahead of readIndex
+bool ringBufferReadable( int num_samples ) {
+    int writeIdx_adjusted = writeIdx;
+    if( writeIdx_adjusted < readIdx )
+        writeIdx_adjusted += RING_BUFFER_LEN;
+
+    return writeIdx_adjusted - readIdx > num_samples;
+}
+
+bool ringBufferRead(int num_samples, float * outputBuff) {
+    if( !ringBufferReadable(num_samples) ) {
+        //printf("[%d] Won't read %d from ringbuffer, (W: %d, R: %d)\n", packet_count, num_samples, writeIdx, readIdx);
+        return false;
+    }
+
+    // If we have to wraparound to service this request, then do so by invoking ourselves twice
+    if( readIdx + num_samples > RING_BUFFER_LEN ) {
+        int first_batch = RING_BUFFER_LEN - readIdx;
+        ringBufferRead(first_batch, outputBuff);
+        ringBufferRead(num_samples - first_batch, outputBuff + first_batch);
+    } else {
+        memcpy(outputBuff, ringBuffer + readIdx, num_samples*sizeof(float));
+        memset(ringBuffer + readIdx, 0, num_samples*sizeof(float));
+        readIdx = (readIdx + num_samples)%RING_BUFFER_LEN;
+    }
+    return true;
+}
+
+bool ringBufferWrite(int num_samples, float * inputBuff) {
+    if( !ringBufferWritable(num_samples) ) {
+        //printf("[%d] Won't write %d to ringbuffer, (W: %d, R: %d)\n", packet_count, num_samples, writeIdx, readIdx);
+        return false;
+    }
+    
+    if( writeIdx + num_samples > RING_BUFFER_LEN ) {
+        int first_batch = RING_BUFFER_LEN - writeIdx;
+        ringBufferWrite(first_batch, inputBuff);
+        ringBufferWrite(num_samples - first_batch, inputBuff + first_batch);
+    } else {
+        memcpy(ringBuffer + writeIdx, inputBuff, num_samples*sizeof(float));
+        writeIdx = (writeIdx + num_samples)%RING_BUFFER_LEN;
+    }
+    return true;
+}
+
+static int output_callback( const void *inputBuffer, void *outputBuffer, unsigned long framesPerBuffer, const PaStreamCallbackTimeInfo* timeInfo, PaStreamCallbackFlags statusFlags, void *userData ) {
+    // First, disable unused variable warnings 
+    (void) userData;
+    (void) statusFlags;
+    (void) timeInfo;
+    (void) inputBuffer;
+
+    // Do that ring buffer magic!
+    if( outputBuffer != NULL ) {
+        if( !ringBufferRead(framesPerBuffer*opts.num_channels, (float *)outputBuffer) )
+            memset(outputBuffer, 0, sizeof(float)*framesPerBuffer*opts.num_channels);
+    }
+    return paContinue;
+}
+
+static int input_callback(  const void *inputBuffer, void *outputBuffer, unsigned long framesPerBuffer, const PaStreamCallbackTimeInfo* timeInfo, PaStreamCallbackFlags statusFlags, void *userData ) {
+    // First, disable unused variable warnings 
+    (void) userData;
+    (void) statusFlags;
+    (void) timeInfo;
+    (void) outputBuffer;
+
+    // Quit out if we don't have an inputBuffer to read from, or if we don't have an entire buffer's worth of space to write to
+    if( inputBuffer != NULL )
+        ringBufferWrite(framesPerBuffer*opts.num_channels, (float *)inputBuffer);
+    return paContinue;
+}
+
 PaStream * openAudio( void ) {
     PaStreamParameters parameters;
     PaStream *stream;
@@ -286,9 +413,9 @@ PaStream * openAudio( void ) {
 
     // Are we doing input or output?
     if( opts.remote_address == NULL )
-        err = Pa_OpenStream( &stream, NULL, &parameters, SAMPLE_RATE, FRAMES_PER_BUFFER, 0, NULL, NULL );
+        err = Pa_OpenStream( &stream, NULL, &parameters, SAMPLE_RATE, opts.bframes, 0, &output_callback, NULL );
     else
-        err = Pa_OpenStream( &stream, &parameters, NULL, SAMPLE_RATE, FRAMES_PER_BUFFER, 0, NULL, NULL );
+        err = Pa_OpenStream( &stream, &parameters, NULL, SAMPLE_RATE, opts.bframes, 0, &input_callback, NULL );
     if( err != paNoError ) {
         fprintf(stderr, "Could not open stream.\n");
         return NULL;
@@ -310,13 +437,68 @@ void sigint_handler(int dummy=0) {
     signal(SIGINT, SIG_DFL);
 }
 
-bool is_silence( void ) {
-    for( int i=0; i<FRAMES_PER_BUFFER*opts.num_channels; ++i ) {
+bool is_silence( float * buffer ) {
+    for( int i=0; i<opts.bframes*opts.num_channels; ++i ) {
         if( buffer[i] != 0.0f )
             return false;
     }
     return true;
 }
+
+void print_level_meter( float * buffer ) {
+    float levels[opts.num_channels];
+    memset(levels, 0, sizeof(float)*opts.num_channels);
+
+    // First, calculate sum(x^2) for x = each channel
+    for( int i=0; i<opts.bframes; ++i ) {
+        for( int k=0; k<opts.num_channels; ++k ) {
+            levels[k] = fmin(1.0, fmax(levels[k], fabs(buffer[i*opts.num_channels + k])));
+        }
+    }
+    for( int k=0; k<opts.num_channels; ++k ) {
+        peak_levels[k] = .99*peak_levels[k];
+        peak_levels[k] = fmax(peak_levels[k], levels[k]);
+    }
+
+    // Next, output the level of each channel:
+    int max_space = 60;
+    printf("                                                                                \r");
+    int level_divisions = (max_space*2 - 1)/opts.num_channels;
+
+    printf("[");
+    for( int k=0; k<opts.num_channels; ++k ) {
+        if( k > 0 )
+            printf("|");
+        // Discretize levels[k] into level_divisions divisions
+        int discrete_level = (int)(levels[k]*level_divisions);
+        int discrete_peak_level = (int)(peak_levels[k]*level_divisions);
+
+        // Next, output discrete_level/2 "=" signs, and if we are odd, output a "-" sign
+        for( int i=0; i<discrete_level/2; i++ )
+            printf("=");
+        if( discrete_level % 2 != 0)
+            printf("-");
+
+        if( discrete_peak_level - discrete_level > 2 ) {
+            for( int i=discrete_level/2 + discrete_level%2; i<discrete_peak_level/2 - 1; ++i )
+                printf(" ");
+            printf("}");
+            for( int i=discrete_peak_level/2; i<max_space/opts.num_channels; ++i )
+                printf(" ");
+        } else {
+            for( int i=discrete_level/2 + discrete_level%2; i<max_space/opts.num_channels; ++i )
+                printf(" ");
+        }
+    }
+    printf("] ");
+
+    for( int k=0; k<opts.num_channels-1; ++k ) {
+        printf("%.3f, ", levels[k]);
+    }
+    printf("%.3f\r", levels[opts.num_channels-1]);
+    fflush(stdout);
+}
+
 
 int main( int argc, char ** argv ) {
     if (Pa_Initialize() != paNoError) {
@@ -350,40 +532,44 @@ int main( int argc, char ** argv ) {
 
     // Start the long haul loop
     printf("Use CTRL-C to gracefully shutdown...\n");
+    float * buffer = (float *)malloc(opts.bframes*opts.num_channels*sizeof(float));
     
     if( opts.remote_address == NULL ) {
         while( shouldRun ) {
-            // If we're a listening kind of guy, listen for aqudio!
+            // If we're a listening kind of guy, listen for audio!
             int data_len = zmq_recv(sock, (char *)encoded_data, MAX_DATA_PACKET_LEN, 0 );
+            packet_count++;
             if( data_len > 0 ) {
-                int dec_len = opus_decode_float( decoder, encoded_data, data_len, buffer, FRAMES_PER_BUFFER, 0 );
-                PaError err = Pa_WriteStream( stream, buffer, FRAMES_PER_BUFFER );
-
-                // If we underflow, then sleep for a millisecond so that we have a chance to get moar buffers
-                if( err == paOutputUnderflowed ) {
-                    printf( "." );
-                    usleep(1000);
-                }
+                int dec_len = opus_decode_float( decoder, encoded_data, data_len, buffer, opts.bframes, 0 );
+                //while( !ringBufferWritable(dec_len*opts.num_channels) )
+                //    usleep(1000);
+                ringBufferWrite(dec_len*opts.num_channels, buffer);
+                //print_level_meter(buffer);
             }
         }
     } else {
         while( shouldRun ) {
-            // If we're a talking kind of guy, then TALK FOR HEAVEN'S SAKE!
-            Pa_ReadStream( stream, buffer, FRAMES_PER_BUFFER );
+            while( !ringBufferReadable(opts.bframes*opts.num_channels) )
+                usleep(1000);
+            ringBufferRead(opts.bframes*opts.num_channels, buffer);
 
             // Check to make sure we've got something to say
-            bool thisBufferSilent = is_silence();
+            bool thisBufferSilent = is_silence(buffer);
+
+            //print_level_meter(buffer);
 
             // Only send something if we've got something to say.  We need to process at least one
             // buffer of complete silence before stopping so that our encoder doesn't see discontinuities
             if( !(thisBufferSilent && lastBufferSilent) ) {
-                int data_len = opus_encode_float( encoder, buffer, FRAMES_PER_BUFFER, encoded_data, MAX_DATA_PACKET_LEN );
+                int data_len = opus_encode_float( encoder, buffer, opts.bframes, encoded_data, MAX_DATA_PACKET_LEN );
                 zmq_send(sock, encoded_data, data_len, ZMQ_DONTWAIT);
+                packet_count++;
             }
 
             lastBufferSilent = thisBufferSilent;
         }
     }
+    free(buffer);
     zmq_close(sock);
     zmq_ctx_destroy(zmq_ctx);
     Pa_CloseStream(stream);
