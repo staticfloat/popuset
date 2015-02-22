@@ -65,12 +65,12 @@ void printUsage(char * prog_name) {
     printf("\t--channels/-c: Number of channels to limit capture/playback to.\n");
     printf("\t--remote/-r:   Address of the remote server to send captured audio to.\n");
     printf("\t--port/-p:     Port you wish to listen on/connect to.\n");
-    printf("\t--bufflen/-b:  Length of transmission buffers in milliseconds.\n");
+    printf("\t--len/-l:      Length of transmission buffers in milliseconds.\n");
     printf("\t               Must be one of 2.5, 5, 10, 20, 40, 60 or 120.\n");
     printf("\t--help/-h:     Print this help message, along with a device listing.\n\n");
 
     printf("Default: listen, port 5040, 10ms buffers, default output, two channels:\n");
-    printf("\t%s -p 5040 -d \"%s\" -b 10 -c %d\n\n", prog_name, Pa_GetDeviceInfo(default_output)->name, Pa_GetDeviceInfo(default_output)->maxOutputChannels );
+    printf("\t%s -p 5040 -d \"%s\" -l 10 -c %d\n\n", prog_name, Pa_GetDeviceInfo(default_output)->name, Pa_GetDeviceInfo(default_output)->maxOutputChannels );
     
     printf("Device listing:\n");
     int numDevices = Pa_GetDeviceCount();
@@ -154,7 +154,7 @@ void parseOptions( int argc, char ** argv ) {
         {"port", required_argument, 0, 'p'},
         {"help", no_argument, 0, 'h'},
         {"meter", no_argument, 0, 'm'},
-        {"bufflen", required_argument, 0, 'b'},
+        {"len", required_argument, 0, 'l'},
         {0, 0, 0, 0}
     };
 
@@ -169,7 +169,7 @@ void parseOptions( int argc, char ** argv ) {
 
     int option_index = 0;
     int c;
-    while( (c = getopt_long( argc, argv, "d:c:r:p:b:mh", long_options, &option_index)) != -1 ) {
+    while( (c = getopt_long( argc, argv, "d:c:r:p:l:mh", long_options, &option_index)) != -1 ) {
         switch( c ) {
             case 'd':
                 if( is_number(optarg) ) {
@@ -200,9 +200,8 @@ void parseOptions( int argc, char ** argv ) {
                 break;
             case 'b':
                 opts.bufflen = atof(optarg);
-                if( opts.bufflen != 2.5f && opts.bufflen != 5.0f && opts.bufflen != 10.0f &&
-                    opts.bufflen != 20.0f && opts.bufflen != 40.0f && opts.bufflen != 60.0f) {
-                    fprintf(stderr, "ERROR: Buffer length must be one of [2.5, 5, 10, 20, 40 60] milliseconds!\n");
+                if( ((int)(opts.bufflen/2.5f)) != opts.bufflen/2.5f ) {
+                    fprintf(stderr, "ERROR: Buffer length must be a multiple of 2.5 milliseconds!\n");
                     exit(1);
                 }
                 break;
