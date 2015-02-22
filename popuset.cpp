@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <portaudio.h>
 #include <opus/opus.h>
+#include <sys/time.h>
 #include <string.h>
 #include <stdlib.h>
 #include <signal.h>
@@ -515,6 +516,12 @@ void print_level_meter( float * buffer ) {
     fflush(stdout);
 }
 
+// Return time in miliseconds
+float time_ms() {
+    timeval t;
+    gettimeofday(&t, NULL);
+    return t.tv_sec*1000.0 + t.tv_usec/1000.0f;
+}
 
 int main( int argc, char ** argv ) {
     if (Pa_Initialize() != paNoError) {
@@ -557,9 +564,16 @@ int main( int argc, char ** argv ) {
             packet_count++;
             if( data_len > 0 ) {
                 int dec_len = opus_decode_float( decoder, encoded_data, data_len, buffer, opts.bframes, 0 );
+
+                float start = time_ms();
                 while( !ringBufferWritable(dec_len*opts.num_channels) )
                     usleep(1000);
+                float end = time_ms();
+
                 ringBufferWrite(dec_len*opts.num_channels, buffer);
+
+                if( end - start > opts.bufflen/2.0f )
+                    printf("Waited %.2fms to write audio!\n", end - start);
 
                 if( opts.meter )
                     print_level_meter(buffer);
@@ -567,9 +581,15 @@ int main( int argc, char ** argv ) {
         }
     } else {
         while( shouldRun ) {
+            float start = time_ms();
             while( !ringBufferReadable(opts.bframes*opts.num_channels) )
                 usleep(1000);
+            float end = time_ms();
+
             ringBufferRead(opts.bframes*opts.num_channels, buffer);
+
+            if( end - start > opts.bufflen/2.0f )
+                printf("Waited %.2fms to read audio!\n", end - start);
 
             // Check to make sure we've got something to say
             bool thisBufferSilent = is_silence(buffer);
