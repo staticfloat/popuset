@@ -25,6 +25,7 @@ float * ringBuffer;
 int readIdx, writeIdx;
 
 // I can't believe I'm actually dedicating global memory to niceties like this
+float * levels;
 float * peak_levels;
 int packet_count = 0;
 
@@ -140,6 +141,8 @@ struct opts_struct {
     float bufflen;
     // How many frames of audio do we send in a bufffer?
     int bframes;
+    // Should we show the meter thing?
+    bool meter;
 } opts;
 
 void parseOptions( int argc, char ** argv ) {
@@ -149,6 +152,7 @@ void parseOptions( int argc, char ** argv ) {
         {"remote", required_argument, 0, 'r'},
         {"port", required_argument, 0, 'p'},
         {"help", no_argument, 0, 'h'},
+        {"meter", no_argument, 0, 'm'},
         {"bufflen", required_argument, 0, 'b'},
         {0, 0, 0, 0}
     };
@@ -160,10 +164,11 @@ void parseOptions( int argc, char ** argv ) {
     opts.remote_address = NULL;
     opts.bufflen = 10.0f;
     opts.port = -1;
+    opts.meter = false;
 
     int option_index = 0;
     int c;
-    while( (c = getopt_long( argc, argv, "d:c:r:p:b:lh", long_options, &option_index)) != -1 ) {
+    while( (c = getopt_long( argc, argv, "d:c:r:p:b:mh", long_options, &option_index)) != -1 ) {
         switch( c ) {
             case 'd':
                 if( is_number(optarg) ) {
@@ -188,6 +193,9 @@ void parseOptions( int argc, char ** argv ) {
                 break;
             case 'p':
                 opts.port = atoi(optarg);
+                break;
+            case 'm':
+                opts.meter = true;
                 break;
             case 'b':
                 opts.bufflen = atof(optarg);
@@ -267,6 +275,9 @@ void initData( void ) {
 
     // Initialize peak levels holders
     peak_levels = (float *)malloc(sizeof(float)*opts.num_channels);
+    memset( peak_levels, 0, sizeof(float)*opts.num_channels);
+    levels = (float *)malloc(sizeof(float)*opts.num_channels);
+    memset( levels, 0, sizeof(float)*opts.num_channels);
 }
 
 void initZMQ( void ) {
@@ -446,8 +457,8 @@ bool is_silence( float * buffer ) {
 }
 
 void print_level_meter( float * buffer ) {
-    float levels[opts.num_channels];
-    memset(levels, 0, sizeof(float)*opts.num_channels);
+    float curr_levels[opts.num_channels];
+    memset(curr_levels, 0, sizeof(float)*opts.num_channels);
 
     // First, calculate sum(x^2) for x = each channel
     for( int i=0; i<opts.bframes; ++i ) {
@@ -456,39 +467,44 @@ void print_level_meter( float * buffer ) {
         }
     }
     for( int k=0; k<opts.num_channels; ++k ) {
-        peak_levels[k] = .99*peak_levels[k];
+        levels[k] = 0.9*levels[k] + 0.1*curr_levels[k];
+
+        peak_levels[k] = .995*peak_levels[k];
         peak_levels[k] = fmax(peak_levels[k], levels[k]);
     }
 
     // Next, output the level of each channel:
     int max_space = 60;
     printf("                                                                                \r");
-    int level_divisions = (max_space*2 - 1)/opts.num_channels;
+    int level_divisions = max_space/opts.num_channels;
 
     printf("[");
     for( int k=0; k<opts.num_channels; ++k ) {
         if( k > 0 )
             printf("|");
         // Discretize levels[k] into level_divisions divisions
-        int discrete_level = (int)(levels[k]*level_divisions);
-        int discrete_peak_level = (int)(peak_levels[k]*level_divisions);
+        int discrete_level = (int)fmin(levels[k]*level_divisions, level_divisions);
+        int discrete_peak_level = (int)fmin(peak_levels[k]*level_divisions, level_divisions);
 
-        // Next, output discrete_level/2 "=" signs, and if we are odd, output a "-" sign
-        for( int i=0; i<discrete_level/2; i++ )
-            printf("=");
-        if( discrete_level % 2 != 0)
-            printf("-");
-
-        if( discrete_peak_level - discrete_level > 2 ) {
-            for( int i=discrete_level/2 + discrete_level%2; i<discrete_peak_level/2 - 1; ++i )
+        // Next, output discrete_level "=" signs radiating outward from the "|"
+        if( k < opts.num_channels/2 ) {
+            for( int i=discrete_peak_level; i<max_space/opts.num_channels; ++i )
+                printf(" ");
+            printf("{");
+            for( int i=discrete_level; i<discrete_peak_level - 1; ++i )
+                printf(" ");
+            for( int i=0; i<discrete_level - (int)(discrete_peak_level == discrete_level); i++ )
+                printf("=");
+        } else {
+            for( int i=0; i<discrete_level - (int)(discrete_peak_level == discrete_level); i++ )
+                printf("=");
+            for( int i=discrete_level; i<discrete_peak_level - 1; ++i )
                 printf(" ");
             printf("}");
-            for( int i=discrete_peak_level/2; i<max_space/opts.num_channels; ++i )
-                printf(" ");
-        } else {
-            for( int i=discrete_level/2 + discrete_level%2; i<max_space/opts.num_channels; ++i )
+            for( int i=discrete_peak_level; i<max_space/opts.num_channels; ++i )
                 printf(" ");
         }
+        
     }
     printf("] ");
 
@@ -544,7 +560,9 @@ int main( int argc, char ** argv ) {
                 //while( !ringBufferWritable(dec_len*opts.num_channels) )
                 //    usleep(1000);
                 ringBufferWrite(dec_len*opts.num_channels, buffer);
-                //print_level_meter(buffer);
+
+                if( opts.meter )
+                    print_level_meter(buffer);
             }
         }
     } else {
@@ -556,7 +574,8 @@ int main( int argc, char ** argv ) {
             // Check to make sure we've got something to say
             bool thisBufferSilent = is_silence(buffer);
 
-            //print_level_meter(buffer);
+            if( opts.meter )
+                print_level_meter(buffer);
 
             // Only send something if we've got something to say.  We need to process at least one
             // buffer of complete silence before stopping so that our encoder doesn't see discontinuities
