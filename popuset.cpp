@@ -368,7 +368,7 @@ bool ringBufferRead(int num_samples, float * outputBuff) {
 
 bool ringBufferWrite(int num_samples, float * inputBuff) {
     if( !ringBufferWritable(num_samples) ) {
-        //printf("[%d] Won't write %d to ringbuffer, (W: %d, R: %d)\n", packet_count, num_samples, writeIdx, readIdx);
+        printf("[%d] Won't write %d to ringbuffer, (W: %d, R: %d)\n", packet_count, num_samples, writeIdx, readIdx);
         return false;
     }
     
@@ -557,8 +557,8 @@ int main( int argc, char ** argv ) {
             packet_count++;
             if( data_len > 0 ) {
                 int dec_len = opus_decode_float( decoder, encoded_data, data_len, buffer, opts.bframes, 0 );
-                //while( !ringBufferWritable(dec_len*opts.num_channels) )
-                //    usleep(1000);
+                while( !ringBufferWritable(dec_len*opts.num_channels) )
+                    usleep(1000);
                 ringBufferWrite(dec_len*opts.num_channels, buffer);
 
                 if( opts.meter )
