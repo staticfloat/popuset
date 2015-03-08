@@ -28,7 +28,6 @@ int readIdx, writeIdx;
 // I can't believe I'm actually dedicating global memory to niceties like this
 float * levels;
 float * peak_levels;
-int packet_count = 0;
 
 // Encoder/decoder objects
 OpusEncoder * encoder;
@@ -39,9 +38,10 @@ unsigned char * encoded_data;
 bool shouldRun = true;
 bool lastBufferSilent = false;
 
-// Our zmq context object and socket object
+// Our zmq context object, socket object, and instantaneous bandwidth estimates
 void * zmq_ctx;
 void * sock;
+unsigned long bytes_last_second = 0, bytes_this_second = 0;
 
 const char * formatSeconds(float seconds) {
     if( seconds < 0.001f )
@@ -55,6 +55,14 @@ const char * formatSeconds(float seconds) {
     return (const char *)buff;
 }
 
+// Return time in miliseconds
+double time_ms() {
+    timeval t;
+    gettimeofday(&t, NULL);
+    return t.tv_sec*1000.0 + t.tv_usec/1000.0f;
+}
+
+
 
 void printUsage(char * prog_name) {
     int default_input = Pa_GetDefaultInputDevice();
@@ -65,12 +73,12 @@ void printUsage(char * prog_name) {
     printf("\t--channels/-c: Number of channels to limit capture/playback to.\n");
     printf("\t--remote/-r:   Address of the remote server to send captured audio to.\n");
     printf("\t--port/-p:     Port you wish to listen on/connect to.\n");
-    printf("\t--len/-l:      Length of transmission buffers in milliseconds.\n");
+    printf("\t--bufflen/-b:  Length of transmission buffers in milliseconds.\n");
     printf("\t               Must be one of 2.5, 5, 10, 20, 40, 60 or 120.\n");
     printf("\t--help/-h:     Print this help message, along with a device listing.\n\n");
 
     printf("Default: listen, port 5040, 10ms buffers, default output, two channels:\n");
-    printf("\t%s -p 5040 -d \"%s\" -l 10 -c %d\n\n", prog_name, Pa_GetDeviceInfo(default_output)->name, Pa_GetDeviceInfo(default_output)->maxOutputChannels );
+    printf("\t%s -p 5040 -d \"%s\" -b 10 -c %d\n\n", prog_name, Pa_GetDeviceInfo(default_output)->name, Pa_GetDeviceInfo(default_output)->maxOutputChannels );
     
     printf("Device listing:\n");
     int numDevices = Pa_GetDeviceCount();
@@ -154,7 +162,7 @@ void parseOptions( int argc, char ** argv ) {
         {"port", required_argument, 0, 'p'},
         {"help", no_argument, 0, 'h'},
         {"meter", no_argument, 0, 'm'},
-        {"len", required_argument, 0, 'l'},
+        {"bufflen", required_argument, 0, 'b'},
         {0, 0, 0, 0}
     };
 
@@ -169,7 +177,7 @@ void parseOptions( int argc, char ** argv ) {
 
     int option_index = 0;
     int c;
-    while( (c = getopt_long( argc, argv, "d:c:r:p:l:mh", long_options, &option_index)) != -1 ) {
+    while( (c = getopt_long( argc, argv, "d:c:r:p:b:mh", long_options, &option_index)) != -1 ) {
         switch( c ) {
             case 'd':
                 if( is_number(optarg) ) {
@@ -349,7 +357,7 @@ bool ringBufferReadable( int num_samples ) {
 
 bool ringBufferRead(int num_samples, float * outputBuff) {
     if( !ringBufferReadable(num_samples) ) {
-        //printf("[%d] Won't read %d from ringbuffer, (W: %d, R: %d)\n", packet_count, num_samples, writeIdx, readIdx);
+        //printf("[%.0f] Won't read %d from ringbuffer, (W: %d, R: %d)\n", time_ms(), num_samples, writeIdx, readIdx);
         return false;
     }
 
@@ -368,7 +376,7 @@ bool ringBufferRead(int num_samples, float * outputBuff) {
 
 bool ringBufferWrite(int num_samples, float * inputBuff) {
     if( !ringBufferWritable(num_samples) ) {
-        printf("[%d] Won't write %d to ringbuffer, (W: %d, R: %d)\n", packet_count, num_samples, writeIdx, readIdx);
+        printf("[%.0f] Won't write %d to ringbuffer, (W: %d, R: %d)\n", time_ms(), num_samples, writeIdx, readIdx);
         return false;
     }
     
@@ -457,25 +465,22 @@ bool is_silence( float * buffer ) {
 }
 
 void print_level_meter( float * buffer ) {
-    float curr_levels[opts.num_channels];
-    memset(curr_levels, 0, sizeof(float)*opts.num_channels);
-
     // First, calculate sum(x^2) for x = each channel
+    memset(levels, 0, sizeof(float)*opts.num_channels);
     for( int i=0; i<opts.bframes; ++i ) {
         for( int k=0; k<opts.num_channels; ++k ) {
-            levels[k] = fmin(1.0, fmax(levels[k], fabs(buffer[i*opts.num_channels + k])));
+            levels[k] = fmin(1.0, fmax(levels[k], buffer[i*opts.num_channels + k]));
         }
     }
-    for( int k=0; k<opts.num_channels; ++k ) {
-        levels[k] = 0.9*levels[k] + 0.1*curr_levels[k];
 
+    for( int k=0; k<opts.num_channels; ++k ) {
         peak_levels[k] = .995*peak_levels[k];
         peak_levels[k] = fmax(peak_levels[k], levels[k]);
     }
 
     // Next, output the level of each channel:
-    int max_space = 60;
-    printf("                                                                                \r");
+    int max_space = 75;
+    printf("                                                                                          \r");
     int level_divisions = max_space/opts.num_channels;
 
     printf("[");
@@ -506,20 +511,8 @@ void print_level_meter( float * buffer ) {
         }
         
     }
-    printf("] ");
-
-    for( int k=0; k<opts.num_channels-1; ++k ) {
-        printf("%.3f, ", levels[k]);
-    }
-    printf("%.3f\r", levels[opts.num_channels-1]);
+    printf("] %.2f kb/s\r", bytes_last_second/1024.0f);
     fflush(stdout);
-}
-
-// Return time in miliseconds
-float time_ms() {
-    timeval t;
-    gettimeofday(&t, NULL);
-    return t.tv_sec*1000.0 + t.tv_usec/1000.0f;
 }
 
 int main( int argc, char ** argv ) {
@@ -555,19 +548,22 @@ int main( int argc, char ** argv ) {
     // Start the long haul loop
     printf("Use CTRL-C to gracefully shutdown...\n");
     float * buffer = (float *)malloc(opts.bframes*opts.num_channels*sizeof(float));
+    double bandwidth_time = time_ms();
     
     if( opts.remote_address == NULL ) {
         while( shouldRun ) {
             // If we're a listening kind of guy, listen for audio!
-            int data_len = zmq_recv(sock, (char *)encoded_data, MAX_DATA_PACKET_LEN, 0 );
-            packet_count++;
-            if( data_len > 0 ) {
-                int dec_len = opus_decode_float( decoder, encoded_data, data_len, buffer, opts.bframes, 0 );
+            int data_len = zmq_recv(sock, (char *)encoded_data, MAX_DATA_PACKET_LEN, ZMQ_NOBLOCK );
 
-                float start = time_ms();
+            if( data_len > 0 ) {
+                // We add 9 for the flags and length fields of every ZMQ packet
+                bytes_this_second += data_len + 9;
+
+                int dec_len = opus_decode_float( decoder, encoded_data, data_len, buffer, opts.bframes, 0 );
+                double start = time_ms();
                 while( !ringBufferWritable(dec_len*opts.num_channels) )
                     usleep(1000);
-                float end = time_ms();
+                double end = time_ms();
 
                 ringBufferWrite(dec_len*opts.num_channels, buffer);
 
@@ -577,18 +573,25 @@ int main( int argc, char ** argv ) {
                 if( opts.meter )
                     print_level_meter(buffer);
             }
+
+            // If we haven't updated our bandwidth estimate for more than a second, do so!
+            if( time_ms() - bandwidth_time > 250.0f ) {
+                bandwidth_time = time_ms();
+                bytes_last_second = bytes_this_second*4;
+                bytes_this_second = 0;
+            }
         }
     } else {
         while( shouldRun ) {
-            float start = time_ms();
+            double start = time_ms();
             while( !ringBufferReadable(opts.bframes*opts.num_channels) )
                 usleep(1000);
-            float end = time_ms();
+            double end = time_ms();
 
             ringBufferRead(opts.bframes*opts.num_channels, buffer);
 
-            if( end - start > opts.bufflen/2.0f )
-                printf("Waited %.2fms to read audio!\n", end - start);
+            if( end - start > 1.5*opts.bufflen )
+                printf("Waited %.2fms to read audio! (bufflen: %.2fms)\n", end - start, opts.bufflen);
 
             // Check to make sure we've got something to say
             bool thisBufferSilent = is_silence(buffer);
@@ -601,10 +604,17 @@ int main( int argc, char ** argv ) {
             if( !(thisBufferSilent && lastBufferSilent) ) {
                 int data_len = opus_encode_float( encoder, buffer, opts.bframes, encoded_data, MAX_DATA_PACKET_LEN );
                 zmq_send(sock, encoded_data, data_len, ZMQ_DONTWAIT);
-                packet_count++;
+                bytes_this_second += data_len + 9;
             }
 
             lastBufferSilent = thisBufferSilent;
+
+            // If we haven't updated our bandwidth estimate for more than a second, do so!
+            if( time_ms() - bandwidth_time > 250.0f ) {
+                bandwidth_time = time_ms();
+                bytes_last_second = bytes_this_second*4;
+                bytes_this_second = 0;
+            }
         }
     }
     free(buffer);
