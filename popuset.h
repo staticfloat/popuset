@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <list>
 #include <string>
 #include <map>
@@ -14,6 +15,10 @@
 
 #include "ringbuffer.h"
 #include "qarb.h"
+
+
+//#define min(x,y) ((x) < (y) ? (x) : (y))
+//#define max(x,y) ((x) > (y) ? (x) : (y))
 
 enum device_direction {
     INPUT,
@@ -37,7 +42,7 @@ struct audio_device {
     // which direction we're using this device in; reading, writing, or both?
     device_direction direction;
 
-    // Broker [ROUTER] -> Audio thread [DEALER], commands (client list, etc...)
+    // Broker [PUB] -> Audio thread [SUB], commands (client list, etc...)
     void * cmd_sock;
 
     // Audio thread [DEALER] -> Broker [ROUTER], data
@@ -76,7 +81,9 @@ struct opts_struct {
 
     // Should we show the meter thing?
     bool meter;
-} opts;
+};
+
+extern opts_struct opts;
 
 
 enum {

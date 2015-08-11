@@ -1,4 +1,6 @@
 #include "qarb.h"
+#include <string.h>
+#include <math.h>
 
 
 QueueingAdditiveRingBuffer::QueueingAdditiveRingBuffer( const unsigned int len ) {
@@ -36,9 +38,9 @@ void QueueingAdditiveRingBuffer::write(const unsigned int num_samples, const uns
 	unsigned int amnt_written = 0;
 	while( amnt_written < num_samples ) {
 		// Instead of memcpy'ing like an ordinary ringbuffer, we ADD, and we don't update this->idx!
-		unsigned int batch_size = min(this->datalen - temp_idx, num_samples - amnt_written);
+		unsigned int batch_size = fmin(this->datalen - temp_idx, num_samples - amnt_written);
 		for( unsigned int i=0; i<batch_size; ++i)
-			this->data[temp_idx + i] += inputBuff[i + amntWritten];
+			this->data[temp_idx + i] += inputBuff[i + amnt_written];
 
 		amnt_written += batch_size;
 		temp_idx = (temp_idx + batch_size)%this->datalen;
@@ -47,7 +49,7 @@ void QueueingAdditiveRingBuffer::write(const unsigned int num_samples, const uns
 
 // Return the amount read from the ringbuffer since the last time we asked about it!
 unsigned int QueueingAdditiveRingBuffer::getDelta() {
-	int amnt = this->last_idx - this->idx;
+    int amnt = this->last_idx - this->idx;
     if( amnt < 0 )
         amnt += this->datalen;
     this->last_idx = this->idx;

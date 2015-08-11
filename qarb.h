@@ -9,5 +9,5 @@ public:
 	unsigned int getDelta();
 protected:
 	float * data;
-	unsigned int len, idx, last_idx;
-}
+	unsigned int datalen, idx, last_idx;
+};

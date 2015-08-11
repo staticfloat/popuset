@@ -6,14 +6,14 @@
 // Format a float as seconds or milliseconds in a string
 const char * formatSeconds(float seconds);
 
+// duplicate a string, but using new instead of malloc()
+char * new_strdup(const char * input);
+
 // Return time in miliseconds
 const double time_ms();
 
 // Return true if the given string is only whitespace and digits
 bool is_number(const char * str);
-
-// Print usage of this program
-void printUsage(char * prog_name);
 
 // Print the level meter thingy that is so awesome and sooooooo unnecessary
 void print_level_meter( float * buffer );
