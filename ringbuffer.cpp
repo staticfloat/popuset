@@ -3,6 +3,7 @@
 
 RingBuffer::RingBuffer( const unsigned int len ) {
 	this->data = new float[len];
+    memset( this->data, 0, sizeof(float)*len );
 	this->readIdx = 0;
 	this->writeIdx = 0;
     this->last_writeIdx = 0;

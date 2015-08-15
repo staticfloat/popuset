@@ -31,15 +31,15 @@ void printUsage(char * prog_name) {
     int output_channels = Pa_GetDeviceInfo(default_output)->maxOutputChannels;
     
     printf("Usage: %s <options> where options is zero or more of:\n", prog_name);
-    printf("\t--device/-d:   Device name/ID to open, with optional channel and direction specifiers.\n");
+    printf("\t--device/-d:   Device name/ID to open, with optional channel and direction.\n");
     printf("\t--target/-t:   Address of peer to send audio to.\n");
-    printf("\t--meter/-m:    Display a wicked-sick live audio meter, right here in your terminal.\n");
+    printf("\t--meter/-m:    Display a wicked-sick live audio meter.\n");
     printf("\t--port/-p:     Port to listen on, only valid if input devices selected.\n");
     printf("\t--help/-h:     Print this help message, along with a device listing.\n\n");
 
     printf("Device strings conform to: <input/output>:<name/numeric id>:<channels>\n");
     printf("Defaults: listen on port 5040, open default input/output devices with up to two channels:\n");
-    printf("\t%s -p 5040 -d \"input:%s:%d\" -d \"output:%s:%d\n\n\"", prog_name, input_name, input_channels, output_name, output_channels );
+    printf("  %s -p 5040 -d \"input:%s:%d\" -d \"output:%s:%d\"\n\n", prog_name, input_name, input_channels, output_name, output_channels );
 
     printf("Device listing:\n");
     int numDevices = Pa_GetDeviceCount();
@@ -100,8 +100,8 @@ audio_device * parseDevice(char * optarg) {
         device->id = atoi(nameid);
         device->name = new_strdup(Pa_GetDeviceInfo(device->id)->name);
     } else {
-        device->name = new_strdup(optarg);
-        device->id = getDeviceId(device->name);
+        device->id = getDeviceId(nameid);
+        device->name = new_strdup(Pa_GetDeviceInfo(device->id)->name);
     }
 
     // Grab the channel numbers, we'll need them!
@@ -202,6 +202,9 @@ void parseOptions( int argc, char ** argv ) {
                     opts.devices.push_back(d);
                 }
             }   break;
+            case 't' : {
+                opts.targets.push_back(optarg);
+            }   break;
             case 'p':
                 opts.port = atoi(optarg);
                 break;
@@ -265,6 +268,10 @@ int main( int argc, char ** argv ) {
 
     // Initialize AudioEngine and all its little thready things
     AudioEngine * ae = new AudioEngine(opts.devices);
+
+    // Initiate connections to our targets
+    for( auto target : opts.targets )
+        ae->connect(target);
 
     // Start the long haul loop
     printf("Use CTRL-C to gracefully shutdown...\n");

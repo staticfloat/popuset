@@ -34,6 +34,7 @@ protected:
 
 	// How we communicate to the outside world.  It's a ROUTER socket, of course.
 	void * world_sock;
+	std::string identity;
 
 	// The sockets for output and input of audio data to the audio threads, PUB and ROUTER, respectively.
 	void * output_sock;

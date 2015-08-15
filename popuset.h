@@ -79,6 +79,9 @@ struct opts_struct {
     // much later, by the AudioEngine.
     std::vector<audio_device *> devices;
 
+    // The targets we should connect to
+    std::vector<std::string> targets;
+
     // Should we show the meter thing?
     bool meter;
 };
