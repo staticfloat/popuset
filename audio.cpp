@@ -13,18 +13,18 @@
 
 void * zmq_ctx;
 
-void print_avg_power(const float * data, int num_samples, int num_channels) {
-    float avg_power[16];
+void print_peak_level(const float * data, int num_samples, int num_channels) {
+    float peak_level[16];
     for( int i=0; i<16; ++i )
-        avg_power[i] = 0.0f;
+        peak_level[i] = 0.0f;
 
     for( int i=0; i<num_samples; ++i ) {
         for( int k=0; k<num_channels; ++k ) {
-            avg_power[k] += fabs(data[i*num_channels + k]);
+            peak_level[k] = fmax(fabs(data[i*num_channels + k]), peak_level[k]);
         }
     }
     for( int k=0; k<num_channels; ++k )
-        printf("%2.2f ", avg_power[k]/num_samples);
+        printf("%2.2f ", peak_level[k]);
     printf("                 \r");
     fflush(stdout);
 }
@@ -40,15 +40,19 @@ static int pa_callback( const void *inputBuffer, void *outputBuffer, unsigned lo
     // If we've got input data, send it out!
     if( inputBuffer != NULL ) {
         printf("INPUT: ");
-        print_avg_power((const float *)inputBuffer, framesPerBuffer, device->num_channels);
-        zmq_send(device->raw_audio_in, inputBuffer, framesPerBuffer*device->num_channels*sizeof(float), ZMQ_DONTWAIT);
+        print_peak_level((const float *)inputBuffer, framesPerBuffer, device->num_channels);
+
+        //if( device->input_log != NULL )
+        //    device->input_log->writeData((const float *)inputBuffer, framesPerBuffer);
+        zmq_send(device->raw_audio_in, inputBuffer, framesPerBuffer*device->num_channels*sizeof(float), 0);
     }
 
     // If we're expecting output data, let's not disappoint!
     if( outputBuffer != NULL ) {
         device->out_buff->read(framesPerBuffer*device->num_channels, (float *)outputBuffer);
         //printf("OUTPUT: ");
-        //print_avg_power((const float *)outputBuffer, framesPerBuffer, device->num_channels);
+        //print_peak_level((const float *)outputBuffer, framesPerBuffer, device->num_channels);
+        //printf("\n");
     }
 
     // The show must go on
@@ -60,10 +64,9 @@ static int pa_callback( const void *inputBuffer, void *outputBuffer, unsigned lo
 // Right now, only covers mono -> multichannel and multichannel -> mono
 void mixdown_channels( float * in_data, float * out_data, unsigned int num_samples, unsigned int in_channels, unsigned int out_channels ) {
     if( in_channels == out_channels ) {
-        memcpy(out_data, in_data, num_samples*in_channels);
+        memcpy(out_data, in_data, num_samples*in_channels*sizeof(float));
         return;
     }
-
     switch( in_channels ) {
         case 1:
             // Just copy input channel to all output channels
@@ -71,6 +74,7 @@ void mixdown_channels( float * in_data, float * out_data, unsigned int num_sampl
                 for( int k=0; k<out_channels; ++k )
                     out_data[i*out_channels + k] = in_data[i];
             }
+            break;
         default:
             // If output is mono, just mix all input channels together
             if( out_channels == 1 ) {
@@ -101,12 +105,13 @@ bool bind_darnit(void * sock, const char * addr) {
 // Initialize Opus {de,en}coders for the given device
 bool initOpus( audio_device * device ) {
     int err;
-    if( device->direction != INPUT ) {
+    if( device->direction != INPUT || true ) {
         device->decoder = opus_decoder_create(SAMPLE_RATE, device->num_channels, &err);
         if (err != OPUS_OK) {
             fprintf(stderr, "Could not create Opus decoder with %d channels for %s.\n", device->num_channels, device->name);
             return false;
         }
+        printf("Created an decoder for %d channels!\n", device->num_channels);
     }
     if( device->direction != OUTPUT ) {
         device->encoder = opus_encoder_create(SAMPLE_RATE, device->num_channels, OPUS_APPLICATION_AUDIO, &err);
@@ -114,6 +119,7 @@ bool initOpus( audio_device * device ) {
             fprintf(stderr, "Could not create Opus encoder with %d channels for %s.\n", device->num_channels, device->name);
             return false;
         }
+        printf("Created an encoder for %d channels!\n", device->num_channels);
     }
     return true;
 }
@@ -202,10 +208,23 @@ void * audio_thread(void * device_ptr) {
     // Initialize Port
     initPortAudio(device);
 
+    WAVFile * input_log = NULL;
+    WAVFile * output_log = NULL;
+    device->out_buff = NULL;
     if( device->direction != INPUT ) {
         // Give ourselves a maximum of 40ms buffer time on the QARB
         device->out_buff = new QueueingAdditiveRingBuffer(40*device->num_channels*SAMPLE_RATE/1000);
+
+        // Create output log
+        std::string filename = opts.logprefix + "." + std::to_string(device->id) + "-out.wav";
+        output_log = new WAVFile(filename.c_str(), device->num_channels, SAMPLE_RATE);
     }
+    if( device->direction != OUTPUT ) {
+        // Create input log
+        std::string filename = opts.logprefix + "." + std::to_string(device->id) + "-in.wav";
+        input_log = new WAVFile(filename.c_str(), device->num_channels, SAMPLE_RATE);
+    }
+    device->input_log = input_log;
 
     // I think it's pretty probable that we'll need at least 10ms for scratch space; let's see if I'm right!
     float * temp_buff = new float[2*10*SAMPLE_RATE/1000];
@@ -315,13 +334,19 @@ void * audio_thread(void * device_ptr) {
             int num_samples = dec_len/(sizeof(float)*device->num_channels);
 
             //printf("[0x%x] Got %d samples of %d channels from device!\n", device, num_samples, device->num_channels);
-            //print_avg_power((const float *)zmq_msg_data(&msg), num_samples, device->num_channels);
+            //print_peak_level((const float *)zmq_msg_data(&msg), num_samples, device->num_channels);
+
+            //if( input_log != NULL )
+            //    input_log->writeData((const float *)zmq_msg_data(&msg), num_samples);
 
             // Encode it:
+            //printf("msg size: %d, num_channels: %d\n", zmq_msg_size(&msg), device->num_channels);
             int enc_len = opus_encode_float(device->encoder, (const float *)zmq_msg_data(&msg), num_samples, encoded_data, MAX_DATA_PACKET_LEN );
             if( enc_len < 0 ) {
                 fprintf(stderr, "opus_encode_float() error: %d\n", enc_len);
             } else {
+                //printf("Encoded %d samples down to %d/%d bytes\n", num_samples, enc_len, MAX_DATA_PACKET_LEN);
+                /**/
                 // Send the decoded length
                 dec_len = htonl(dec_len);
                 zmq_send(device->input_sock, &dec_len, sizeof(int), ZMQ_SNDMORE);
@@ -335,6 +360,24 @@ void * audio_thread(void * device_ptr) {
 
                 // Small amount of cleanup
                 zmq_msg_close(&msg);
+                /**/
+
+                /**/
+                if( input_log != NULL ) {
+                    memset(temp_buff, 0, temp_buff_len*sizeof(float));
+                    // Decode the data, expanding temp_buff if we need to:
+                    if( temp_buff_len < num_samples*device->num_channels ) {
+                        delete[] temp_buff;
+                        temp_buff_len = num_samples*device->num_channels;
+                        temp_buff = new float[temp_buff_len];
+                    }
+                    int dl = opus_decode_float(device->decoder, encoded_data, enc_len, temp_buff, num_samples, 0);
+                    if( dl != num_samples )
+                        printf("AWWOOOOGAH! (%d != %d)\n", dl, num_samples);
+                    if( dl > 0 )
+                        input_log->writeData((const float *)temp_buff, num_samples);
+                }
+                /**/
             }
         }
 
@@ -359,26 +402,26 @@ void * audio_thread(void * device_ptr) {
                 // Read in the audio from this client; first decoded length
                 zmq_recv(items[i+2].socket, &dec_len, sizeof(int), 0);
                 dec_len = ntohl(dec_len);
+
                 // Then number of channels
                 zmq_recv(items[i+2].socket, &num_channels, sizeof(int), 0);
                 num_channels = ntohl(num_channels);
 
-                int num_samples = dec_len/(sizeof(float)*num_channels);
-
-                
-
                 // Finally, the audio itself
-                zmq_recv(items[i+2].socket, encoded_data, MAX_DATA_PACKET_LEN, 0);
+                int enc_len = zmq_recv(items[i+2].socket, encoded_data, MAX_DATA_PACKET_LEN, 0);
 
                 // Decode the data, expanding temp_buff if we need to:
-                if( temp_buff_len < num_samples*num_channels ) {
+                if( temp_buff_len < dec_len/sizeof(float) ) {
                     delete[] temp_buff;
-                    temp_buff_len = num_samples*num_channels;
+                    temp_buff_len = dec_len/sizeof(float);
                     temp_buff = new float[temp_buff_len];
                 }
 
                 // Decode it into our (possibly newly-widened) temp_buff
-                int actually_dec_len = opus_decode_float(device->decoder, encoded_data, num_samples, temp_buff, temp_buff_len, 0);
+                int actually_dec_len = opus_decode_float(device->decoder, encoded_data, enc_len, temp_buff, temp_buff_len, 0);
+
+                // Calculate the expected number of samples
+                int num_samples = dec_len/(sizeof(float)*num_channels);
                 if( actually_dec_len != num_samples ) {
                     fprintf(stderr, "ERROR: actually_dec_len (%d) != num_samples (%d)\n", actually_dec_len, num_samples);
                     break;
@@ -396,11 +439,14 @@ void * audio_thread(void * device_ptr) {
                 // Mix the audio down for output onto our device
                 mixdown_channels(temp_buff, mix_buff, num_samples, num_channels, device->num_channels);
 
-                printf("DECODED: ");
-                print_avg_power((const float *)temp_buff, num_samples, num_channels);
-                printf("\nMIXED DOWN: ");
-                print_avg_power((const float *)mix_buff, num_samples, device->num_channels);
+                //printf("DECODED: ");
+                //print_peak_level((const float *)temp_buff, num_samples, num_channels);
+                //printf("\nMIXED DOWN: ");
+                //print_peak_level((const float *)mix_buff, num_samples, device->num_channels);
 
+                if( output_log != NULL ) {
+                    output_log->writeData(mix_buff, num_samples);
+                }
 
                 // Write it into our circular buffer! First, lookup the offset this particular client's got:
                 int offset = clientOffsets[items[i+2].socket];
@@ -423,6 +469,12 @@ void * audio_thread(void * device_ptr) {
         opus_decoder_destroy(device->decoder);
     if( device->encoder != NULL )
         opus_encoder_destroy(device->encoder);
+
+    // Cleanup logfiles, if they exist
+    if( output_log != NULL )
+        delete output_log;
+    if( input_log != NULL )
+        delete input_log;
 
     // Close client socks
     while( !clientSocks.empty() ) {

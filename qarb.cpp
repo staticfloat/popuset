@@ -5,6 +5,7 @@
 
 QueueingAdditiveRingBuffer::QueueingAdditiveRingBuffer( const unsigned int len ) {
 	this->data = new float[len];
+    memset(this->data, 0, sizeof(float)*len);
 	this->datalen = len;
 	this->idx = 0;
 	this->last_idx = 0;

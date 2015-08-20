@@ -15,10 +15,7 @@
 
 #include "ringbuffer.h"
 #include "qarb.h"
-
-
-//#define min(x,y) ((x) < (y) ? (x) : (y))
-//#define max(x,y) ((x) > (y) ? (x) : (y))
+#include "wavfile.h"
 
 enum device_direction {
     INPUT,
@@ -66,6 +63,9 @@ struct audio_device {
 
     // The thread object
     pthread_t thread;
+
+    // If we're logging input/output, these are the files we write to
+    WAVFile *output_log, *input_log;
 };
 
 
@@ -81,6 +81,9 @@ struct opts_struct {
 
     // The targets we should connect to
     std::vector<std::string> targets;
+
+    // The prefix of logging files (e.g. .wav files) to write to
+    std::string logprefix;
 
     // Should we show the meter thing?
     bool meter;
@@ -106,9 +109,8 @@ struct audio_device_command {
 
 
 
-// These are things that I may or may not ever change; 48KHz sampling
+// I am pretty much locked in to 48 KHz sample rate, so let's just define that here.
 #define SAMPLE_RATE             48000
-//#define AUDIO_BUFF_LEN          ((5*SAMPLE_RATE)/1000)
 
 // We'll just keep this for funsies; this is the maximum packet size for opus
 // We've set it to an optimistic estimate of the MTU, we'll see if that's actually reasonable?

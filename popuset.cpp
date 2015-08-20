@@ -35,6 +35,7 @@ void printUsage(char * prog_name) {
     printf("\t--target/-t:   Address of peer to send audio to.\n");
     printf("\t--meter/-m:    Display a wicked-sick live audio meter.\n");
     printf("\t--port/-p:     Port to listen on, only valid if input devices selected.\n");
+    printf("\t--log/-l:      Prefix of .wav files to log input/output to.\n");
     printf("\t--help/-h:     Print this help message, along with a device listing.\n\n");
 
     printf("Device strings conform to: <input/output>:<name/numeric id>:<channels>\n");
@@ -184,6 +185,7 @@ void parseOptions( int argc, char ** argv ) {
         {"target", required_argument, 0, 't'},
         {"meter", no_argument, 0, 'm'},
         {"port", required_argument, 0, 'p'},
+        {"log", required_argument, 0, 'l'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
     };
@@ -191,10 +193,11 @@ void parseOptions( int argc, char ** argv ) {
     // Set defaults, which is all channels on default output device, listening on 5040
     opts.port = 5040;
     opts.meter = false;
+    opts.logprefix = "";
 
     int option_index = 0;
     int c;
-    while( (c = getopt_long( argc, argv, "d:t:p:mh", long_options, &option_index)) != -1 ) {
+    while( (c = getopt_long( argc, argv, "d:t:p:l:mh", long_options, &option_index)) != -1 ) {
         switch( c ) {
             case 'd': {
                 audio_device * d = parseDevice(optarg);
@@ -210,6 +213,9 @@ void parseOptions( int argc, char ** argv ) {
                 break;
             case 'm':
                 opts.meter = true;
+                break;
+            case 'l':
+                opts.logprefix = optarg;
                 break;
             case 'h':
                 printUsage(argv[0]);
