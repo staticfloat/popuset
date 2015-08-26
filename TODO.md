@@ -9,9 +9,10 @@ TODO
 * Multiple soundcard capture
 * Multichannel capture?
 * Encryption?
+* Fade audio in when a client (re-)connects
 
 
 
 What I need to do next:
-- Make the threads do as much of their own setup as possible
-- Move communication logic over to audio thread
+- Change offset calculations; they're brittle and annoying.
+- Specifically, this->idx can change (without updating offsets) and cause all sorts of problems with clients
