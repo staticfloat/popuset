@@ -49,6 +49,23 @@ static int pa_callback( const void *inputBuffer, void *outputBuffer, unsigned lo
 
     // If we're expecting output data, let's not disappoint!
     if( outputBuffer != NULL ) {
+        // First, send out an empty message
+        int empty = 0;
+        zmq_send(device->mixed_audio_in, &empty, 1, 0);
+
+        // Now, receive the response
+        int dec_len = zmq_recv(device->mixed_audio_in, outputBuffer, framesPerBuffer*device->num_channels*sizeof(float), 0);
+
+        //printf("Just outputted %d (well, really %d) samples\n", framesPerBuffer, dec_len/(sizeof(float)*device->num_channels));
+
+        /*
+        if( device->output_log != NULL ) {
+            printf("OUTPUT: ");
+            print_peak_level((const float *) outputBuffer, framesPerBuffer, device->num_channels);
+            device->output_log->writeData((const float *)outputBuffer, framesPerBuffer);
+        }
+        */
+        /*
         int samples_readable = device->out_buff->getMaxReadable();
         //printf("Have %d readable\n", device->out_buff->getMaxReadable());
         if( samples_readable < framesPerBuffer*device->num_channels ) {
@@ -57,7 +74,6 @@ static int pa_callback( const void *inputBuffer, void *outputBuffer, unsigned lo
         }
         else {
             device->out_buff->read(framesPerBuffer*device->num_channels, (float *)outputBuffer);
-            /**/
             float power = 0.0f;
             for( int i=0; i<framesPerBuffer*device->num_channels; ++i ) {
                 power += fabs(((const float *)outputBuffer)[i]);
@@ -65,10 +81,10 @@ static int pa_callback( const void *inputBuffer, void *outputBuffer, unsigned lo
             if( power == 0.0f ) {
                 printf("DETECTED UNDERRUN when we thought we had %d samples to read!\n", samples_readable);
             }
-            /**/
             if( device->output_log != NULL )
                 device->output_log->writeData((const float *)outputBuffer, framesPerBuffer);
         }
+        */
         
         //printf("OUTPUT: ");
         //print_peak_level((const float *)outputBuffer, framesPerBuffer, device->num_channels);
@@ -82,6 +98,7 @@ static int pa_callback( const void *inputBuffer, void *outputBuffer, unsigned lo
 
 
 // Right now, only covers mono -> multichannel and multichannel -> mono
+// Note; DOES NOT OVERWRITE; adds so that we can mix into buffers directly!
 void mixdown_channels( float * in_data, float * out_data, unsigned int num_samples, unsigned int in_channels, unsigned int out_channels ) {
     if( in_channels == out_channels ) {
         memcpy(out_data, in_data, num_samples*in_channels*sizeof(float));
@@ -92,14 +109,13 @@ void mixdown_channels( float * in_data, float * out_data, unsigned int num_sampl
             // Just copy input channel to all output channels
             for( int i=0; i<num_samples; ++i ) {
                 for( int k=0; k<out_channels; ++k )
-                    out_data[i*out_channels + k] = in_data[i];
+                    out_data[i*out_channels + k] += in_data[i];
             }
             break;
         default:
             // If output is mono, just mix all input channels together
             if( out_channels == 1 ) {
                 for( int i=0; i<num_samples; ++i ) {
-                    out_data[i] = 0.0f;
                     for( int k=0; k<in_channels; ++k )
                         out_data[i] += in_data[i*in_channels + k];
                     out_data[i] /= in_channels;
@@ -131,7 +147,7 @@ bool initOpus( audio_device * device ) {
             fprintf(stderr, "Could not create Opus decoder with %d channels for %s.\n", device->num_channels, device->name);
             return false;
         }
-        printf("Created a decoder for %d channels!\n", device->num_channels);
+        //printf("Created a decoder for %d channels!\n", device->num_channels);
     }
     if( device->direction != OUTPUT ) {
         device->encoder = opus_encoder_create(SAMPLE_RATE, device->num_channels, OPUS_APPLICATION_AUDIO, &err);
@@ -139,7 +155,7 @@ bool initOpus( audio_device * device ) {
             fprintf(stderr, "Could not create Opus encoder with %d channels for %s.\n", device->num_channels, device->name);
             return false;
         }
-        printf("Created an encoder for %d channels!\n", device->num_channels);
+        //printf("Created an encoder for %d channels!\n", device->num_channels);
     }
     return true;
 }
@@ -175,6 +191,15 @@ bool initSocks( audio_device * device ) {
     char addr[20];
     sprintf(&addr[0], "inproc://dev%2d_raw", device->id);
     zmq_connect(device->raw_audio_out, addr);
+
+    // Create channel to send mixed audio to audio device.
+    device->mixed_audio_out = create_sock(ZMQ_PAIR);
+    if( device->mixed_audio_out == NULL ) {
+        fprintf(stderr, "Could not create mixed_audio_out socket for device %s", device->name);
+        return false;
+    }
+    sprintf(&addr[0], "inproc://dev%2d_mixed", device->id);
+    zmq_connect(device->mixed_audio_out, addr);
     return true;
 }
 
@@ -197,7 +222,7 @@ bool initPortAudio( audio_device * device ) {
     // Actually try to open the stream
     printf("Opening \"%s\" (%d) with %d channels...\n", device->name, device->id, device->num_channels);
     PaError err;
-    err = Pa_OpenStream( &device->stream, inparams, outparams, SAMPLE_RATE, (10*SAMPLE_RATE)/1000, 0, &pa_callback, (void *)device );
+    err = Pa_OpenStream( &device->stream, inparams, outparams, SAMPLE_RATE, SAMPLES_IN_BUFFER, 0, &pa_callback, (void *)device );
 
     if( err != paNoError ) {
         fprintf(stderr, "Could not open stream %d - %s\n", device->id, device->name);
@@ -230,10 +255,10 @@ void * audio_thread(void * device_ptr) {
 
     WAVFile * input_log = NULL;
     WAVFile * output_log = NULL;
-    device->out_buff = NULL;
+    //device->out_buff = NULL;
     if( device->direction != INPUT ) {
         // Give ourselves a maximum of 40ms buffer time on the QARB
-        device->out_buff = new QueueingAdditiveRingBuffer(40*device->num_channels*SAMPLE_RATE/1000);
+        //device->out_buff = new QueueingAdditiveRingBuffer(40*device->num_channels*SAMPLE_RATE/1000);
 
         // Create output log
         std::string filename = opts.logprefix + "." + std::to_string(device->id) + "-out.wav";
@@ -247,11 +272,12 @@ void * audio_thread(void * device_ptr) {
     device->input_log = input_log;
     device->output_log = output_log;
 
-    // I think it's pretty probable that we'll need at least 10ms for scratch space; let's see if I'm right!
-    float * temp_buff = new float[2*10*SAMPLE_RATE/1000];
-    unsigned int temp_buff_len = 2*10*SAMPLE_RATE/1000;
-    float * mix_buff = new float[device->num_channels*10*SAMPLE_RATE/1000];
-    unsigned int mix_buff_len = device->num_channels*10*SAMPLE_RATE/1000;
+    // I think it's pretty probable that we'll need at least 10ms stereo for scratch space; let's see if I'm right!
+    unsigned int temp_buff_len = 2*SAMPLES_IN_BUFFER;
+    float * temp_buff = new float[temp_buff_len];
+    unsigned int mix_buff_len = device->num_channels*SAMPLES_IN_BUFFER;
+    float * mix_buff = new float[mix_buff_len];
+    memset(mix_buff, 0, sizeof(float)*mix_buff_len);
 
     // Scratch space for encoded data
     unsigned char * encoded_data = new unsigned char[MAX_DATA_PACKET_LEN];
@@ -259,14 +285,17 @@ void * audio_thread(void * device_ptr) {
     // Our client identity list, mapping to output sockets.  These sockets go:
     // Broker [PUB] -> Audio thread [SUB]
     std::map<std::string, void *> clientSocks;
+    std::map<std::string, std::vector<float *> > clientChunks;
+    std::map<std::string, bool> clientMixedInAlready;
 
     // Build up a pollitem_t group from our sockets
-    zmq_pollitem_t items[66];
+    zmq_pollitem_t items[67];
     items[0].socket = device->cmd_sock;
     items[1].socket = device->raw_audio_out;
+    items[2].socket = device->mixed_audio_out;
     
     // We only deal in ZMQ_POLLIN events, so set those up first
-    for( int i=0; i<66; ++i ) {
+    for( int i=0; i<sizeof(items)/sizeof(zmq_pollitem_t); ++i ) {
         items[i].fd = 0;
         items[i].revents = 0;
         items[i].events = ZMQ_POLLIN;
@@ -277,7 +306,7 @@ void * audio_thread(void * device_ptr) {
     while( keepRunning ) {
         // Wait for an event
         //printf("[0x%x] Waiting for events from %d sockets...\n", device, 2 + clientSocks.size() );
-        int rc = zmq_poll(&items[0], 2 + clientSocks.size(), -1);
+        int rc = zmq_poll(&items[0], 3 + clientSocks.size(), -1);
         
         if( rc <= 0 ) {
             fprintf(stderr, "zmq_poll() == %d: %s\n", rc, strerror(errno) );
@@ -285,16 +314,51 @@ void * audio_thread(void * device_ptr) {
             break;
         }
 
+        // Is the device asking for audio from us? (This is the most important, let's deal with it first)
+        if( items[2].revents & ZMQ_POLLIN ) {
+            // Read the empty message
+            int empty;
+            zmq_recv(device->mixed_audio_out, &empty, 0, 0);
+
+            // Send it the pre-mixed buffer of audio
+            zmq_send(device->mixed_audio_out, mix_buff, sizeof(float)*mix_buff_len, 0);
+
+            if( device->output_log != NULL )
+                device->output_log->writeData((const float *)mix_buff, SAMPLES_IN_BUFFER);
+
+            // Now, mix up as much of the next buffer of audio as we can.  First, clear mix_buff:
+            memset(mix_buff, 0, sizeof(float)*mix_buff_len);
+
+            // Next, mix in every client that has buffers waiting.
+            for( auto &kv : clientMixedInAlready ) {
+                if( clientChunks[kv.first].size() > 0 ) {
+                    // Grab the first chunk of audio waiting for me;
+                    float * chunk = clientChunks[kv.first][0];
+                    clientChunks.erase(clientChunks.begin());
+
+                    // Mix it in, and delete the chunk!
+                    for( int i=0; i<device->num_channels*SAMPLES_IN_BUFFER; ++i )
+                        mix_buff[i] += chunk[i];
+                    delete[] chunk;
+                } else {
+                    // If we didn't have anything queued up, just say that this client hasn't
+                    // been mixed into mix_buff already, so it will get put in immediately later.
+                    clientMixedInAlready[kv.first] = false;
+                }
+            }
+        }
+
+
         // Are we receiving a command?
         if( items[0].revents & ZMQ_POLLIN ) {
             audio_device_command cmd;
             readCommand(device->cmd_sock, &cmd);
-            printf("[0x%llx] Got a command (%d)\n", (unsigned long long)device, cmd.type);
+            //printf("[0x%llx] Got a command (%d)\n", (unsigned long long)device, cmd.type);
 
             switch( cmd.type ) {
                 case CMD_CLIENTLIST: {
                     std::unordered_set<std::string> clients;
-                    printf("Rebuilding clientlist\n...");
+                    //printf("Rebuilding clientlist...\n");
 
                     // The data field of cmd now holds a NULL-separated list of client identities,
                     // ending with an entry of zero length (an extra NULL at the end of the last id)
@@ -313,7 +377,8 @@ void * audio_thread(void * device_ptr) {
                             zmq_connect(sock, "inproc://broker_output");
                             zmq_setsockopt(sock, ZMQ_SUBSCRIBE, identity, identity_len);
                             clientSocks[identity] = sock;
-                            printf("We are ready to receive from %s on socket 0x%llx\n", identity, (unsigned long long) sock);
+                            clientMixedInAlready[identity] = false;
+                            //printf("We are ready to receive from %s on socket 0x%llx\n", identity, (unsigned long long) sock);
                         }
                         idx += identity_len + 1;
                     }
@@ -322,14 +387,24 @@ void * audio_thread(void * device_ptr) {
                     for( auto& kv : clientSocks ) {
                         if( clients.count(kv.first) == 0 ) {
                             // Let's cleanup this client!
-                            device->out_buff->clearClient(kv.first);
+                            //device->out_buff->clearClient(kv.first);
+
+                            // Close that special little socket we designed for the client
                             zmq_close(kv.second);
+
+                            // Erase the mixing flags and chunk storage
+                            clientMixedInAlready.erase(kv.first);
+                            for( int i=0; i<clientChunks[kv.first].size(); ++i )
+                                delete[] clientChunks[kv.first][i];
+                            clientChunks.erase(kv.first);
+
+                            // Finally, erase all mention in clientSocks
                             clientSocks.erase(kv.first);
                         }
                     }
 
                     // Finally, rebuild items:
-                    int i = 2;
+                    int i = 3;
                     for( auto& kv : clientSocks ) {
                         items[i].socket = kv.second;
                         i++;
@@ -360,8 +435,8 @@ void * audio_thread(void * device_ptr) {
             //printf("[0x%x] Got %d samples of %d channels from device!\n", device, num_samples, device->num_channels);
             //print_peak_level((const float *)zmq_msg_data(&msg), num_samples, device->num_channels);
 
-            //if( input_log != NULL )
-            //    input_log->writeData((const float *)zmq_msg_data(&msg), num_samples);
+            if( input_log != NULL )
+                input_log->writeData((const float *)zmq_msg_data(&msg), num_samples);
 
             // Encode it:
             //printf("msg size: %d, num_channels: %d\n", zmq_msg_size(&msg), device->num_channels);
@@ -369,8 +444,6 @@ void * audio_thread(void * device_ptr) {
             if( enc_len < 0 ) {
                 fprintf(stderr, "opus_encode_float() error: %d\n", enc_len);
             } else {
-                //printf("Encoded %d samples down to %d/%d bytes\n", num_samples, enc_len, MAX_DATA_PACKET_LEN);
-                /**/
                 // Send the decoded length
                 dec_len = htonl(dec_len);
                 zmq_send(device->input_sock, &dec_len, sizeof(int), ZMQ_SNDMORE);
@@ -384,48 +457,30 @@ void * audio_thread(void * device_ptr) {
 
                 // Small amount of cleanup
                 zmq_msg_close(&msg);
-                /**/
-
-                // NABIL: DELETE ME?
-                /**/
-                if( input_log != NULL ) {
-                    memset(temp_buff, 0, temp_buff_len*sizeof(float));
-                    // Decode the data, expanding temp_buff if we need to:
-                    if( temp_buff_len < num_samples*device->num_channels ) {
-                        delete[] temp_buff;
-                        temp_buff_len = num_samples*device->num_channels;
-                        temp_buff = new float[temp_buff_len];
-                    }
-                    int dl = opus_decode_float(device->decoder, encoded_data, enc_len, temp_buff, num_samples, 0);
-                    if( dl != num_samples )
-                        printf("AWWOOOOGAH! (%d != %d)\n", dl, num_samples);
-                    if( dl > 0 )
-                        input_log->writeData((const float *)temp_buff, num_samples);
-                }
-                /**/
             }
         }
 
         // Did we just get audio from a client?
         for( int i=0; i<clientSocks.size(); ++i ) {
-            //printf("Checking user socket %d (0x%llx)...\n", i, items[i+2].socket);
-            if( items[i + 2].revents & ZMQ_POLLIN ) {
+            //printf("Checking user socket %d (0x%llx)...\n", i, items[i+3].socket);
+            zmq_pollitem_t * item = &items[i+3];
+            if( item->revents & ZMQ_POLLIN ) {
                 // Get the identity first
                 char client_ident[IDENT_LEN];
-                if( zmq_recv(items[i+2].socket, &client_ident[0], IDENT_LEN, 0) == -1 )
-                    printf("[0x%llx] zmq_recv failed; %s\n", items[i+2].socket, strerror(errno));
+                if( zmq_recv(item->socket, &client_ident[0], IDENT_LEN, 0) == -1 )
+                    printf("[0x%llx] zmq_recv failed; %s\n", (unsigned long long)item->socket, strerror(errno));
     
                 int dec_len, num_channels;
                 // Read in the audio from this client; first decoded length
-                zmq_recv(items[i+2].socket, &dec_len, sizeof(int), 0);
+                zmq_recv(item->socket, &dec_len, sizeof(int), 0);
                 dec_len = ntohl(dec_len);
 
                 // Then number of channels
-                zmq_recv(items[i+2].socket, &num_channels, sizeof(int), 0);
+                zmq_recv(item->socket, &num_channels, sizeof(int), 0);
                 num_channels = ntohl(num_channels);
 
                 // Finally, the audio itself
-                int enc_len = zmq_recv(items[i+2].socket, encoded_data, MAX_DATA_PACKET_LEN, 0);
+                int enc_len = zmq_recv(item->socket, encoded_data, MAX_DATA_PACKET_LEN, 0);
 
                 //printf("Got a %d dec_len, %d num_channels, and %d enc_len from %s\n", dec_len, num_channels, enc_len, &client_ident[0]);
 
@@ -446,29 +501,16 @@ void * audio_thread(void * device_ptr) {
                     break;
                 }
 
-                //printf("Just decoded %d samples from client %s!\n", actually_dec_len, &client_ident[0]);
-                
-                // Mix the audio down, expanding mix_buff if we need to:
-                if( mix_buff_len < num_samples*device->num_channels ) {
-                    delete[] mix_buff;
-                    mix_buff_len = num_samples*device->num_channels;
-                    mix_buff = new float[mix_buff_len];
+                std::string client_key = &client_ident[0];
+                if( !clientMixedInAlready[client_key] ) {
+                    clientMixedInAlready[client_key] = true;
+                    mixdown_channels(temp_buff, mix_buff, num_samples, num_channels, device->num_channels);    
+                } else {
+                    float * client_backlog = new float[num_samples*device->num_channels];
+                    memset(client_backlog, 0, sizeof(float)*num_samples*device->num_channels);
+                    mixdown_channels(temp_buff, client_backlog, num_samples, num_channels, device->num_channels);
+                    clientChunks[client_key].push_back(client_backlog);
                 }
-
-                // Mix the audio down for output onto our device
-                mixdown_channels(temp_buff, mix_buff, num_samples, num_channels, device->num_channels);
-
-                //printf("DECODED: ");
-                //print_peak_level((const float *)temp_buff, num_samples, num_channels);
-                //printf("\nMIXED DOWN: ");
-                //print_peak_level((const float *)mix_buff, num_samples, device->num_channels);
-
-                //if( output_log != NULL ) {
-                    //output_log->writeData(mix_buff, num_samples);
-                //}
-
-                // Write it into our circular buffer! First, lookup the offset this particular client's got:
-                device->out_buff->write(num_samples*device->num_channels, &client_ident[0], mix_buff);
             }
         }
     }
@@ -502,6 +544,7 @@ void * audio_thread(void * device_ptr) {
     zmq_close(device->cmd_sock);
     zmq_close(device->input_sock);
     zmq_close(device->raw_audio_out);
+    zmq_close(device->mixed_audio_out);
 
     // Cleanup top-tier stuff!
     delete[] device->name;
@@ -535,6 +578,13 @@ AudioEngine::AudioEngine(std::vector<audio_device *> & devices) : devices(device
         sprintf(&addr[0], "inproc://dev%2d_raw", device->id);
         zmq_bind(device->raw_audio_in, addr);
 
+        device->mixed_audio_in = create_sock(ZMQ_PAIR);
+        if( device->mixed_audio_in == NULL ) {
+            fprintf(stderr, "Could not create mixed_audio_in socket for device %s\n", device->name);
+        }
+        sprintf(&addr[0], "inproc://dev%2d_mixed", device->id);
+        zmq_bind(device->mixed_audio_in, addr);
+
         if( pthread_create(&device->thread, NULL, audio_thread, (void *)device) != 0 ) {
             fprintf(stderr, "pthread_create() failed!\n");
             throw "Error: Could not create thread!";
@@ -556,6 +606,7 @@ AudioEngine::~AudioEngine() {
     // Join all threads
     for( auto device : this->devices ) {
         zmq_close(device->raw_audio_in);
+        zmq_close(device->mixed_audio_in);
         pthread_join(device->thread, NULL);
     }
 
@@ -587,8 +638,16 @@ void AudioEngine::initBroker() {
 
     // Bind to the desired port
     char bind_addr[14];
+    unsigned short orig_port = opts.port;
     snprintf(bind_addr, 14, "tcp://*:%d", opts.port);
-    bind_darnit(this->world_sock, bind_addr);
+    while( !bind_darnit(this->world_sock, bind_addr) && opts.port - orig_port < 10 ) {
+        opts.port += 1;
+        snprintf(bind_addr, 14, "tcp://*:%d", opts.port);
+    }
+    if( opts.port - orig_port >= 10 ) {
+        fprintf(stderr, "Ran out of attempts to bind world_sock; ragequitting!\n");
+        exit(0);
+    }
 
     // Initialize audio output PUB socket
     this->output_sock = create_sock(ZMQ_PUB);
@@ -657,8 +716,8 @@ void AudioEngine::processBroker() {
     items[1].socket = this->input_sock;
     items[1].events = ZMQ_POLLIN;
 
-    // Wait for an event
-    int rc = zmq_poll(items, 2, -1);
+    // Check if we've got an event
+    int rc = zmq_poll(items, 2, 0);
     if( rc > 0 ) {
         // Did we get a message from the world?
         if( items[0].revents & ZMQ_POLLIN ) {
@@ -732,12 +791,16 @@ void AudioEngine::processBroker() {
     // Search for dead clients every 5 seconds
     double curr_time = time_ms();
     if( curr_time - this->last_clean > 5*1000.0f ) {
-        for( auto itty : this->inbound ) {
+        std::unordered_set<std::string> to_delete;
+        for( auto& itty : this->inbound ) {
             // If we haven't heard from somebody since the last clean, clean them!
-            if( this->last_clean > itty.second ) {
-                printf("Culling %s since they've been silent for a while...\n", itty.first.c_str());
-                this->inbound.erase(itty.first);
-            }
+            if( this->last_clean > itty.second )
+                to_delete.insert(itty.first);
+        }
+
+        for( auto& itty : to_delete ) {
+            printf("Culling %s\n", itty.c_str());
+            this->inbound.erase(itty);
         }
         this->last_clean = curr_time;
     }

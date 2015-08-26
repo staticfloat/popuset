@@ -13,6 +13,7 @@
 #include "util.h"
 #include "audio.h"
 #include <getopt.h>
+#include <unistd.h>
 
 // Our almighty options struct
 opts_struct opts;
@@ -284,20 +285,12 @@ int main( int argc, char ** argv ) {
 
     while( shouldRun ) {
         ae->processBroker();
+
+        // Run this 1000 times a second at maximum
+        usleep(1000);
     }
 
-/*
-    // If we haven't updated our bandwidth estimate for more than a second, do so!
-    if( time_ms() - bandwidth_time > 250.0f ) {
-        bandwidth_time = time_ms();
-        bytes_last_second = bytes_this_second*4;
-        bytes_this_second = 0;
-    }
-
-    if( opts.meter )
-        print_level_meter(buffer);
-*/
-
+    // Cleanup the audio engine!
     delete ae;
 
     printf("\nCleaned up gracefully!\n");

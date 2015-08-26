@@ -45,8 +45,10 @@ struct audio_device {
     // Audio thread [DEALER] -> Broker [ROUTER], data
     void * input_sock;
 
-    // Ring buffer that we mix into for output
-    QueueingAdditiveRingBuffer * out_buff;
+    // Audio thread [PAIR] -> Audio device [PAIR]
+    void * mixed_audio_out; // PAIR (thread side)
+    void * mixed_audio_in;  // PAIR (device side)
+
 
     // Device [PUSH] -> Audio thread [PULL]
     void * raw_audio_in;    // PUSH
@@ -111,6 +113,9 @@ struct audio_device_command {
 
 // I am pretty much locked in to 48 KHz sample rate, so let's just define that here.
 #define SAMPLE_RATE             48000
+
+// I am also locked in to 10ms buffers, for better or worse.
+#define SAMPLES_IN_BUFFER       ((10*SAMPLE_RATE)/1000)
 
 // We'll just keep this for funsies; this is the maximum packet size for opus
 // We've set it to an optimistic estimate of the MTU, we'll see if that's actually reasonable?
