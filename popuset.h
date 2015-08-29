@@ -12,6 +12,8 @@
 #include <portaudio.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include <math.h>
+#include <string.h>
 
 #include "ringbuffer.h"
 #include "qarb.h"

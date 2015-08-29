@@ -14,6 +14,7 @@
 #include "audio.h"
 #include <getopt.h>
 #include <unistd.h>
+#include <signal.h>
 
 // Our almighty options struct
 opts_struct opts;
