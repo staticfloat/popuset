@@ -49,7 +49,7 @@ void print_level_meter( const float * buffer, const int num_samples, const int n
 
     // Next, output the level of each channel:
     int max_space = 60;
-    printf("                                                                                \r");
+    printf("\r                                                                                \r");
     int level_divisions = max_space/num_channels;
 
     printf("[");
@@ -85,7 +85,7 @@ void print_level_meter( const float * buffer, const int num_samples, const int n
     for( int k=0; k<num_channels-1; ++k ) {
         printf("%.3f, ", levels[k]);
     }
-    printf("%.3f\r", levels[num_channels-1]);
+    printf("%.3f", levels[num_channels-1]);
     fflush(stdout);
 }
 
@@ -100,10 +100,6 @@ static int pa_callback( const void *inputBuffer, void *outputBuffer, unsigned lo
     // If we've got input data, send it out!
     if( inputBuffer != NULL ) {
         zmq_send(device->raw_audio_in, inputBuffer, framesPerBuffer*device->num_channels*sizeof(float), 0);
-
-        if( opts.meter ) {
-            print_level_meter( (const float *)inputBuffer, framesPerBuffer, device->num_channels);
-        }
     }
 
     if( outputBuffer != NULL ) {
@@ -347,6 +343,17 @@ void * audio_thread(void * device_ptr) {
             // Send it the pre-mixed buffer of audio
             zmq_send(device->mixed_audio_out, mix_buff, sizeof(float)*mix_buff_len, 0);
 
+            int maxsize = 0;
+            for( auto &kv : clientMixedInAlready ) {
+                maxsize = fmax(clientChunks[kv.first].size(), maxsize);
+            }
+
+            if( opts.meter ) {
+                print_level_meter( (const float *)mix_buff, SAMPLES_IN_BUFFER, device->num_channels);
+                printf(" (%d)", maxsize);
+                fflush(stdout);
+            }
+
             if( device->output_log != NULL )
                 device->output_log->writeData((const float *)mix_buff, SAMPLES_IN_BUFFER);
 
@@ -358,7 +365,7 @@ void * audio_thread(void * device_ptr) {
                 if( clientChunks[kv.first].size() > 0 ) {
                     // Grab the first chunk of audio waiting for me;
                     float * chunk = clientChunks[kv.first][0];
-                    clientChunks.erase(clientChunks.begin());
+                    clientChunks[kv.first].erase(clientChunks[kv.first].begin());
 
                     // Mix it in, and delete the chunk!
                     for( int i=0; i<device->num_channels*SAMPLES_IN_BUFFER; ++i )
@@ -456,14 +463,13 @@ void * audio_thread(void * device_ptr) {
             int dec_len = zmq_msg_size(&msg);
             int num_samples = dec_len/(sizeof(float)*device->num_channels);
 
-            //printf("[0x%x] Got %d samples of %d channels from device!\n", device, num_samples, device->num_channels);
-            //print_peak_level((const float *)zmq_msg_data(&msg), num_samples, device->num_channels);
+            if( opts.meter )
+                print_level_meter( (const float *)zmq_msg_data(&msg), num_samples, device->num_channels);
 
             if( input_log != NULL )
                 input_log->writeData((const float *)zmq_msg_data(&msg), num_samples);
 
             // Encode it:
-            //printf("msg size: %d, num_channels: %d\n", zmq_msg_size(&msg), device->num_channels);
             int enc_len = opus_encode_float(device->encoder, (const float *)zmq_msg_data(&msg), num_samples, encoded_data, MAX_DATA_PACKET_LEN );
             if( enc_len < 0 ) {
                 fprintf(stderr, "opus_encode_float() error: %d\n", enc_len);
