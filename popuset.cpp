@@ -15,6 +15,7 @@
 #include <getopt.h>
 #include <unistd.h>
 #include <signal.h>
+#include <sys/resource.h>
 
 // Our almighty options struct
 opts_struct opts;
