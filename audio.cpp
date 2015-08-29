@@ -29,6 +29,66 @@ void print_peak_level(const float * data, int num_samples, int num_channels) {
     fflush(stdout);
 }
 
+void print_level_meter( const float * buffer, const int num_samples, const int num_channels ) {
+    static float levels[16], peak_levels[16];
+    float curr_levels[num_channels];
+    memset(curr_levels, 0, sizeof(float)*num_channels);
+
+    // First, calculate sum(x^2) for x = each channel
+    for( int i=0; i<num_samples; ++i ) {
+        for( int k=0; k<num_channels; ++k ) {
+            levels[k] = fmin(1.0, fmax(levels[k], fabs(buffer[i*num_channels + k])));
+        }
+    }
+    for( int k=0; k<num_channels; ++k ) {
+        levels[k] = 0.9*levels[k] + 0.1*curr_levels[k];
+
+        peak_levels[k] = .995*peak_levels[k];
+        peak_levels[k] = fmax(peak_levels[k], levels[k]);
+    }
+
+    // Next, output the level of each channel:
+    int max_space = 60;
+    printf("                                                                                \r");
+    int level_divisions = max_space/num_channels;
+
+    printf("[");
+    for( int k=0; k<num_channels; ++k ) {
+        if( k > 0 )
+            printf("|");
+        // Discretize levels[k] into level_divisions divisions
+        int discrete_level = (int)fmin(levels[k]*level_divisions, level_divisions);
+        int discrete_peak_level = (int)fmin(peak_levels[k]*level_divisions, level_divisions);
+
+        // Next, output discrete_level "=" signs radiating outward from the "|"
+        if( k < num_channels/2 ) {
+            for( int i=discrete_peak_level; i<max_space/num_channels; ++i )
+                printf(" ");
+            printf("{");
+            for( int i=discrete_level; i<discrete_peak_level - 1; ++i )
+                printf(" ");
+            for( int i=0; i<discrete_level - (int)(discrete_peak_level == discrete_level); i++ )
+                printf("=");
+        } else {
+            for( int i=0; i<discrete_level - (int)(discrete_peak_level == discrete_level); i++ )
+                printf("=");
+            for( int i=discrete_level; i<discrete_peak_level - 1; ++i )
+                printf(" ");
+            printf("}");
+            for( int i=discrete_peak_level; i<max_space/num_channels; ++i )
+                printf(" ");
+        }
+        
+    }
+    printf("] ");
+
+    for( int k=0; k<num_channels-1; ++k ) {
+        printf("%.3f, ", levels[k]);
+    }
+    printf("%.3f\r", levels[num_channels-1]);
+    fflush(stdout);
+}
+
 static int pa_callback( const void *inputBuffer, void *outputBuffer, unsigned long framesPerBuffer, const PaStreamCallbackTimeInfo* timeInfo, PaStreamCallbackFlags statusFlags, void *userData ) {
     // First, disable unused variable warnings 
     (void) statusFlags;
@@ -39,56 +99,20 @@ static int pa_callback( const void *inputBuffer, void *outputBuffer, unsigned lo
 
     // If we've got input data, send it out!
     if( inputBuffer != NULL ) {
-        printf("INPUT: ");
-        print_peak_level((const float *)inputBuffer, framesPerBuffer, device->num_channels);
-
-        //if( device->input_log != NULL )
-        //    device->input_log->writeData((const float *)inputBuffer, framesPerBuffer);
         zmq_send(device->raw_audio_in, inputBuffer, framesPerBuffer*device->num_channels*sizeof(float), 0);
+
+        if( opts.meter ) {
+            print_level_meter( (const float *)inputBuffer, framesPerBuffer, device->num_channels);
+        }
     }
 
-    // If we're expecting output data, let's not disappoint!
     if( outputBuffer != NULL ) {
-        // First, send out an empty message
+        // First, send out an empty message, asking for data
         int empty = 0;
         zmq_send(device->mixed_audio_in, &empty, 1, 0);
 
         // Now, receive the response
         int dec_len = zmq_recv(device->mixed_audio_in, outputBuffer, framesPerBuffer*device->num_channels*sizeof(float), 0);
-
-        //printf("Just outputted %d (well, really %d) samples\n", framesPerBuffer, dec_len/(sizeof(float)*device->num_channels));
-
-        /*
-        if( device->output_log != NULL ) {
-            printf("OUTPUT: ");
-            print_peak_level((const float *) outputBuffer, framesPerBuffer, device->num_channels);
-            device->output_log->writeData((const float *)outputBuffer, framesPerBuffer);
-        }
-        */
-        /*
-        int samples_readable = device->out_buff->getMaxReadable();
-        //printf("Have %d readable\n", device->out_buff->getMaxReadable());
-        if( samples_readable < framesPerBuffer*device->num_channels ) {
-            printf("UNDERRUN! (%d < %d)\n", samples_readable, framesPerBuffer*device->num_channels);
-            memset(outputBuffer, 0, sizeof(float)*framesPerBuffer*device->num_channels);
-        }
-        else {
-            device->out_buff->read(framesPerBuffer*device->num_channels, (float *)outputBuffer);
-            float power = 0.0f;
-            for( int i=0; i<framesPerBuffer*device->num_channels; ++i ) {
-                power += fabs(((const float *)outputBuffer)[i]);
-            }
-            if( power == 0.0f ) {
-                printf("DETECTED UNDERRUN when we thought we had %d samples to read!\n", samples_readable);
-            }
-            if( device->output_log != NULL )
-                device->output_log->writeData((const float *)outputBuffer, framesPerBuffer);
-        }
-        */
-        
-        //printf("OUTPUT: ");
-        //print_peak_level((const float *)outputBuffer, framesPerBuffer, device->num_channels);
-        //printf("\n");
     }
 
     // The show must go on
@@ -669,7 +693,7 @@ void AudioEngine::initBroker() {
 void AudioEngine::connect(std::string addr) {
     // Let's find out the identity of this peer:
     std::string tcp_addr = "tcp://" + addr;
-    void * ident_sock = zmq_socket(zmq_ctx, ZMQ_REQ);
+    void * ident_sock = create_sock(ZMQ_REQ);
     zmq_setsockopt(ident_sock, ZMQ_IDENTITY, this->identity.c_str(), this->identity.size() + 1);
     zmq_connect(ident_sock, tcp_addr.c_str() );
 
@@ -680,8 +704,8 @@ void AudioEngine::connect(std::string addr) {
     zmq_pollitem_t item = {ident_sock, 0, ZMQ_POLLIN, 0};
     int rc = zmq_poll(&item, 1, 2000);
     if( rc <= 0 || !(item.revents & ZMQ_POLLIN) ) {
-        printf("ERROR: Could not connect and learn identity of %s [%d]\n", tcp_addr.c_str(), rc);
         zmq_close(ident_sock);
+        printf("ERROR: Could not connect and learn identity of %s [%d]\n", tcp_addr.c_str(), rc);
         return;
     }
 
