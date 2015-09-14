@@ -1,6 +1,7 @@
 #include "util.h"
 #include <sys/time.h>
 #include <math.h>
+#include <zmq.h>
 
 // Format seconds into a string
 const char * formatSeconds(float seconds) {
@@ -120,4 +121,69 @@ bool matchBeginnings(const char * x, const char * y) {
             return false;
     }
     return true;
+}
+
+int get_monitor_event (void *monitor, int *value, char **address) {
+    // First frame in message contains event number and value
+    zmq_msg_t msg;
+    zmq_msg_init (&msg);
+    if (zmq_msg_recv (&msg, monitor, 0) == -1)
+       return -1; // Interruped, presumably
+
+    uint8_t *data = (uint8_t *) zmq_msg_data (&msg);
+    uint16_t event = *(uint16_t *) (data);
+    if (value)
+        *value = *(uint32_t *) (data + 2);
+
+    // Second frame in message contains event address
+    zmq_msg_init (&msg);
+    if (zmq_msg_recv (&msg, monitor, 0) == -1)
+        return -1; // Interruped, presumably
+
+    if (address) {
+        uint8_t *data = (uint8_t *) zmq_msg_data (&msg);
+        size_t size = zmq_msg_size (&msg);
+        *address = (char *) malloc (size + 1);
+        memcpy (*address, data, size);
+        (*address)[size] = 0;
+    }
+    return event;
+}
+
+
+// REP socket monitor thread
+void * socket_monitor_thread(void *ctx) {
+    void *s = zmq_socket(ctx, ZMQ_PAIR);
+    int rc = zmq_connect(s, "inproc://monitor");
+    while( true ) {
+        int value = 0;
+        char * address = NULL;
+        int event = get_monitor_event(s, &value, &address);
+
+        switch( event ) {
+            case ZMQ_EVENT_CONNECTED:
+                printf("EVENT: Connected! [%s]\n", address);
+                break;
+            case ZMQ_EVENT_CONNECT_DELAYED:
+                printf("EVENT: Connect delayed! Waiting %dms... [%s]\n", value, address);
+                break;
+            case ZMQ_EVENT_CONNECT_RETRIED:
+                printf("EVENT: Connect retried! [%s]\n", address);
+                break;
+            case ZMQ_EVENT_ACCEPTED:
+                printf("EVENT: Accepted! [%s]\n", address);
+                break;
+            case ZMQ_EVENT_CLOSED:
+                printf("EVENT: Closed! [%s]\n", address);
+                break;
+            case ZMQ_EVENT_DISCONNECTED:
+                printf("EVENT: Disconnected! [%s]\n", address);
+                break;
+            default:
+                printf("EVENT: [%d] [%d] [%s]\n", event, value, address);
+                break;    
+        }
+    }
+    zmq_close(s);
+    return NULL;
 }

@@ -9,7 +9,8 @@
 #include <unistd.h>
 #include <zmq.h>
 
-#define IDENT_LEN   INET6_ADDRSTRLEN + 8
+#define IDENT_LEN           INET6_ADDRSTRLEN + 8
+#define METER_TIMEDIFF      1.0/15
 
 void * zmq_ctx;
 
@@ -49,7 +50,7 @@ void print_level_meter( const float * buffer, const int num_samples, const int n
 
     // Next, output the level of each channel:
     int max_space = 60;
-    printf("\r                                                                                \r");
+    printf("\r                                                                                     \r");
     int level_divisions = max_space/num_channels;
 
     printf("[");
@@ -323,6 +324,7 @@ void * audio_thread(void * device_ptr) {
 
     // Let's listen for ZMQ events, and mix some wicked sick beats
     bool keepRunning = true;
+    double last_meter = 0.0; 
     while( keepRunning ) {
         // Wait for an event
         //printf("[0x%x] Waiting for events from %d sockets...\n", device, 2 + clientSocks.size() );
@@ -348,9 +350,10 @@ void * audio_thread(void * device_ptr) {
                 maxsize = fmax(clientChunks[kv.first].size(), maxsize);
             }
 
-            if( opts.meter ) {
+            if( opts.meter && time_ms() - last_meter > METER_TIMEDIFF  ) {
+                last_meter = time_ms();
                 print_level_meter( (const float *)mix_buff, SAMPLES_IN_BUFFER, device->num_channels);
-                printf(" (%d)", maxsize);
+                printf(" (%d)\r", maxsize);
                 fflush(stdout);
             }
 
@@ -512,7 +515,7 @@ void * audio_thread(void * device_ptr) {
                 // Finally, the audio itself
                 int enc_len = zmq_recv(item->socket, encoded_data, MAX_DATA_PACKET_LEN, 0);
 
-                //printf("Got a %d dec_len, %d num_channels, and %d enc_len from %s\n", dec_len, num_channels, enc_len, &client_ident[0]);
+                printf("Got a %d dec_len, %d num_channels, and %d enc_len from %s\n", dec_len, num_channels, enc_len, &client_ident[0]);
 
                 // Decode the data, expanding temp_buff if we need to:
                 if( temp_buff_len < dec_len/sizeof(float) ) {
@@ -619,6 +622,11 @@ AudioEngine::AudioEngine(std::vector<audio_device *> & devices) : devices(device
             fprintf(stderr, "pthread_create() failed!\n");
             throw "Error: Could not create thread!";
         }
+
+        // IN CASE OF EMERGENCY, BREAK GLASS.  And then uncomment these pieces of code.
+        //zmq_socket_monitor(this->world_sock, "inproc://monitor", ZMQ_EVENT_ALL);
+        //pthread_t monitor_thread;
+        //pthread_create(&monitor_thread, NULL, socket_monitor_thread, zmq_ctx);
     }
 
     // Initialize encoded_data as well
@@ -725,8 +733,11 @@ void AudioEngine::connect(std::string addr) {
     
     // Insert the identity into outbound, and connect our world_sock!
     this->outbound.insert(client_ident);
+    if( zmq_connect( this->world_sock, tcp_addr.c_str() ) != 0 ) {
+        printf("ERROR: Could not connect world sock to %s!\n", tcp_addr.c_str());
+        return;
+    } 
     printf("Connected to %s (%s)\n", addr.c_str(), client_ident);
-    zmq_connect( this->world_sock, tcp_addr.c_str() );
 }
 
 void AudioEngine::disconnect(std::string addr) {
@@ -737,6 +748,7 @@ void AudioEngine::disconnect(std::string addr) {
 void AudioEngine::processBroker() {
     // Build up a pollitem_t group from our sockets
     zmq_pollitem_t items[2];
+    memset(items, 0, sizeof(zmq_pollitem_t)*2);
 
     // First up, world_sock!
     items[0].socket = this->world_sock;
@@ -747,7 +759,7 @@ void AudioEngine::processBroker() {
     items[1].events = ZMQ_POLLIN;
 
     // Check if we've got an event
-    int rc = zmq_poll(items, 2, 0);
+    int rc = zmq_poll(items, 2, -1);
     if( rc > 0 ) {
         // Did we get a message from the world?
         if( items[0].revents & ZMQ_POLLIN ) {
@@ -755,7 +767,7 @@ void AudioEngine::processBroker() {
             char client_tmp[IDENT_LEN];
             int client_len = zmq_recv(this->world_sock, &client_tmp[0], IDENT_LEN, 0);
 
-            //printf("Received a world message from %s!\n", &client_tmp[0]);
+            printf("Received a world message from %s!\n", &client_tmp[0]);
 
             // Get the decoded audio length, number of channels, and encoded audio:
             int audio_len, num_channels;
@@ -764,7 +776,7 @@ void AudioEngine::processBroker() {
                 // Clear empty message as well
                 zmq_recv(this->world_sock, &audio_len, sizeof(int), 0);
 
-                //printf("Returning identity %s to %s\n", this->identity.c_str(), &client_tmp[0]);
+                printf("Returning identity %s to %s\n", this->identity.c_str(), &client_tmp[0]);
                 zmq_send(this->world_sock, &client_tmp[0], client_len, ZMQ_SNDMORE);
                 zmq_send(this->world_sock, 0, 0, ZMQ_SNDMORE);
                 zmq_send(this->world_sock, this->identity.c_str(), this->identity.size()+1, 0);
@@ -923,6 +935,12 @@ void * create_sock(int sock_type, int hwm) {
     zmq_setsockopt(sock, ZMQ_RCVHWM, &hwm, sizeof(int));
     zmq_setsockopt(sock, ZMQ_SNDHWM, &hwm, sizeof(int));
     zmq_setsockopt(sock, ZMQ_LINGER, &linger, sizeof(int));
+
+    // If we're a router socket, play it fast and loose with our clients
+    if( sock_type == ZMQ_ROUTER ) {
+        int handover = 1;
+        zmq_setsockopt(sock, ZMQ_ROUTER_HANDOVER, &handover, sizeof(int));
+    }
     return sock;
 }
 
