@@ -515,7 +515,7 @@ void * audio_thread(void * device_ptr) {
                 // Finally, the audio itself
                 int enc_len = zmq_recv(item->socket, encoded_data, MAX_DATA_PACKET_LEN, 0);
 
-                printf("Got a %d dec_len, %d num_channels, and %d enc_len from %s\n", dec_len, num_channels, enc_len, &client_ident[0]);
+                //printf("Got a %d dec_len, %d num_channels, and %d enc_len from %s\n", dec_len, num_channels, enc_len, &client_ident[0]);
 
                 // Decode the data, expanding temp_buff if we need to:
                 if( temp_buff_len < dec_len/sizeof(float) ) {
@@ -767,7 +767,7 @@ void AudioEngine::processBroker() {
             char client_tmp[IDENT_LEN];
             int client_len = zmq_recv(this->world_sock, &client_tmp[0], IDENT_LEN, 0);
 
-            printf("Received a world message from %s!\n", &client_tmp[0]);
+            //printf("Received a world message from %s!\n", &client_tmp[0]);
 
             // Get the decoded audio length, number of channels, and encoded audio:
             int audio_len, num_channels;
