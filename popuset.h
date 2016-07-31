@@ -15,7 +15,6 @@
 #include <math.h>
 #include <string.h>
 
-#include "ringbuffer.h"
 #include "qarb.h"
 #include "wavfile.h"
 

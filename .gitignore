@@ -2,3 +2,4 @@ popuset
 popuset-debug
 .DS_Store
 *.dSYM
+*.gch
