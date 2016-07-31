@@ -37,7 +37,7 @@ struct audio_device {
 
     // How many channels we read/write  (Note this is limited by opus)
     unsigned short num_channels;
-    
+
     // which direction we're using this device in; reading, writing, or both?
     device_direction direction;
 
@@ -55,9 +55,6 @@ struct audio_device {
     // Device [PUSH] -> Audio thread [PULL]
     void * raw_audio_in;    // PUSH
     void * raw_audio_out;   // PULL
-
-    // Audio heading into the device, and the decoder that supplies it
-    OpusDecoder * decoder;
 
     // Audio coming out of the device, and the encoder that will consume it
     OpusEncoder * encoder;

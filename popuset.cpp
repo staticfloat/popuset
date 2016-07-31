@@ -1,14 +1,3 @@
-/*
-#include <sys/time.h>
-#include <string.h>
-#include <stdlib.h>
-#include <signal.h>
-#include <sys/resource.h>
-#include <math.h>
-#include <ctype.h>
-#include <unistd.h>
-*/
-
 #include "popuset.h"
 #include "util.h"
 #include "audio.h"
@@ -32,7 +21,7 @@ void printUsage(char * prog_name) {
     int default_output = Pa_GetDefaultOutputDevice();
     const char * output_name = Pa_GetDeviceInfo(default_output)->name;
     int output_channels = Pa_GetDeviceInfo(default_output)->maxOutputChannels;
-    
+
     printf("Usage: %s <options> where options is zero or more of:\n", prog_name);
     printf("\t--device/-d:   Device name/ID to open, with optional channel and direction.\n");
     printf("\t--target/-t:   Address of peer to send audio to.\n");
@@ -123,7 +112,7 @@ audio_device * parseDevice(char * optarg) {
             delete device->name;
             delete device;
             return NULL;
-        } 
+        }
     } else {
         // If we don't let's see if we can guess which way to go with this device:
         if( outchan == 0 && inchan != 0 )
@@ -235,7 +224,7 @@ void parseOptions( int argc, char ** argv ) {
         default_output->name = new_strdup(Pa_GetDeviceInfo(default_output->id)->name);
         default_output->num_channels = fmin(2, Pa_GetDeviceInfo(default_output->id)->maxOutputChannels);
         default_output->direction = OUTPUT;
-        
+
         // Default input
         audio_device * default_input = new audio_device();
         default_input->id = Pa_GetDefaultInputDevice();
@@ -246,7 +235,7 @@ void parseOptions( int argc, char ** argv ) {
         // Add them to opts.devices so they get initialized by the AudioEngine
         opts.devices.push_back(default_output);
         opts.devices.push_back(default_input);
-    }    
+    }
 
     if( optind < argc ) {
         printf("Unrecognized extra arguments: ");
