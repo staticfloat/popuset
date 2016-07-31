@@ -22,4 +22,7 @@ void gen_random_addr(char * addr, unsigned int max_len);
 bool matchBeginnings(const char * x, const char * y);
 
 void * socket_monitor_thread(void * ctx);
+
+void squelch_stderr();
+void restore_stderr();
 #endif //UI_H

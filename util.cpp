@@ -2,6 +2,8 @@
 #include <sys/time.h>
 #include <math.h>
 #include <zmq.h>
+#include <unistd.h>
+#include <fcntl.h>
 
 // Format seconds into a string
 const char * formatSeconds(float seconds) {
@@ -99,7 +101,7 @@ void print_level_meter( float * buffer, unsigned int num_frames, unsigned int nu
             for( int i=discrete_peak_level; i<max_space/num_channels; ++i )
                 printf(" ");
         }
-        
+
     }
     printf("] %.2f kb/s\r", bytes_per_second/1024.0f);
     fflush(stdout);
@@ -107,7 +109,7 @@ void print_level_meter( float * buffer, unsigned int num_frames, unsigned int nu
 
 void gen_random_addr(char * addr, unsigned int max_len) {
     static const char alphanum[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-    
+
     sprintf(addr, "inproc://");
     for (int i = 9; i < max_len - 1; ++i)
         addr[i] = alphanum[rand() % (sizeof(alphanum) - 1)];
@@ -181,9 +183,26 @@ void * socket_monitor_thread(void *ctx) {
                 break;
             default:
                 printf("EVENT: [%d] [%d] [%s]\n", event, value, address);
-                break;    
+                break;
         }
     }
     zmq_close(s);
     return NULL;
+}
+
+
+int old_stderr = -1;
+int dev_null = -1;
+void squelch_stderr()
+{
+    if( old_stderr == -1)
+        old_stderr = dup(STDERR_FILENO);
+    if( dev_null == -1 )
+        dev_null = open("/dev/null", O_WRONLY);
+    dup2(dev_null, STDERR_FILENO);
+}
+
+void restore_stderr()
+{
+    dup2(old_stderr, STDERR_FILENO);
 }

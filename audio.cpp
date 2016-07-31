@@ -238,10 +238,15 @@ bool initPortAudio( audio_device * device ) {
 
     // Actually try to open the stream
     printf("Opening \"%s\" (%d) with %d channels...\n", device->name, device->id, device->num_channels);
+
+    // Worst workaround for https://lists.columbia.edu/pipermail/portaudio/2015-October/000093.html EVER
+    squelch_stderr();
+
     PaError err;
     err = Pa_OpenStream( &device->stream, inparams, outparams, SAMPLE_RATE, SAMPLES_IN_BUFFER, 0, &pa_callback, (void *)device );
 
     if( err != paNoError ) {
+        restore_stderr();
         fprintf(stderr, "Could not open stream %d - %s\n", device->id, device->name);
         return false;
     }
@@ -249,9 +254,12 @@ bool initPortAudio( audio_device * device ) {
     // Start the stream, spawning off a thread to run the callbacks from.
     err = Pa_StartStream( device->stream );
     if( err != paNoError ) {
+        restore_stderr();
         fprintf(stderr, "Could not start stream %d - %s\n", device->id, device->name);
         return false;
     }
+
+    restore_stderr();
 
     return true;
 }
