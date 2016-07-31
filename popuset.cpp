@@ -30,7 +30,7 @@ void printUsage(char * prog_name) {
     printf("\t--log/-l:      Prefix of .wav files to log input/output to.\n");
     printf("\t--help/-h:     Print this help message, along with a device listing.\n\n");
 
-    printf("Device strings conform to: <input/output>:<name/numeric id>:<channels>\n");
+    printf("Device strings conform to: <\"input\"/\"output\">:<device name/numeric id>:<channels>\n");
     printf("Defaults: listen on port 5040, open default input/output devices with up to two channels:\n");
     printf("  %s -p 5040 -d \"input:%s:%d\" -d \"output:%s:%d\"\n\n", prog_name, input_name, input_channels, output_name, output_channels );
 

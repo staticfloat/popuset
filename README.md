@@ -20,7 +20,9 @@ Then, checkout the sources and run `make` inside the source directory.
 Usage
 =====
 
-Usage is pretty simple.  run `./popuset --help` to see an overview of options, along with example command line usages.  Start one server and one client, (clients have the `-r` option specified) and enjoy your audio!
+`popuset` implements a fully connectable audio mesh network.  Each instance of `popuset` can be instructed to open a single device (for input, output, or both) and listens for incoming connections (on port `5040` by default, settable with the `--port/-p` option).  `popuset` instances are targeted at eachother using the `--target/-t` option.  To send audio from computer A's microphone to computer B's speakers, you would therefore instruct computer B to open its output device (using the `--device/-d` option). You would then tell computer A to open the microphone audio device (via the `--device/-d` option) and target it at computer B with the `--target/-t` option.  Note that multiple `popuset` instances can target the same output instance, and they will all be mixed together in realtime.
+
+You can "log" input/output audio to `.wav` files using the `--log/-l` option.  This is useful for debugging, or just recording audio that other users are sending your way.
 
 
 Raspi notes
