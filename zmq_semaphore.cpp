@@ -49,8 +49,6 @@ ZMQSemaphore::ZMQSemaphore(void * zmq_ctx, const char * addr) {
 	int linger = 0;
     zmq_setsockopt(sock, ZMQ_LINGER, &linger, sizeof(int));
 
-	//printf("Connecting to %s...\n", this->addr);
-
 	if( zmq_connect(sock, this->addr ) != 0 ) {
 		//printf("Could not connect zmq semaphore socket\n");
 		throw "Could not connect zmq semaphore socket";
@@ -59,7 +57,7 @@ ZMQSemaphore::ZMQSemaphore(void * zmq_ctx, const char * addr) {
 
 void ZMQSemaphore::gen_random_addr() {
     static const char alphanum[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-    
+
     this->addr = new char[16];
     sprintf(this->addr, "inproc://");
     for (int i = 9; i < 15; ++i)
