@@ -1,19 +1,34 @@
-CC=g++
-CFLAGS+=-I$(shell echo ~)/local/include -std=c++11
-LDFLAGS+=-L$(shell echo ~)/local/lib -lportaudio -lopus -lzmq
-SRC=popuset.cpp audio.cpp qarb.cpp util.cpp wavfile.cpp
-HEADERS=popuset.h audio.h qarb.h util.h wavfile.h
+all: build/receiver
 
-all: release debug
+SOURCES = $(foreach S,$(wildcard receiver/*.c),$(notdir $(S)))
+OBJECTS = $(patsubst %.c,build/%.o,$(SOURCES))
+CFLAGS = -O2 -g
+LDFLAGS = -lasound -lopus -lm -lpthread
 
-popuset: $(SRC) $(HEADERS) Makefile
-	$(CC) $(CFLAGS) -O3 -o popuset $(SRC) $(LDFLAGS)
+build:
+	mkdir -p $@
 
-popuset-debug: $(SRC) $(HEADERS) Makefile
-	$(CC) $(CFLAGS) -g -O0 -o popuset-debug $(SRC) $(LDFLAGS)
+build/%.o: receiver/%.c receiver/receiver.h | build
+	$(CC) -c  -o $@ $(CFLAGS) $<
 
-release: popuset
-debug: popuset-debug
+build/receiver: $(OBJECTS)
+	$(CC) -o $@ $(LDFLAGS) $^
+
+run: build/receiver
+	sudo build/receiver
+
+gdb: build/receiver
+	gdb --args build/receiver
+
+deps:
+	sudo apt install -y libasound2-dev libzmq-dev libopus-dev
+
+push:
+	make clean
+	rsync -Pav . pi@speakerpi0:~/src/alsastream/
 
 clean:
-	rm popuset popuset-debug
+	rm -rf build
+
+print-%:
+	echo $*=$($*)
