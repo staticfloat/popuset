@@ -1,6 +1,6 @@
 #include "receiver.h"
 
-int listen_multicast(const uint16_t port, const char * group) {
+int listen_udp(const uint16_t port) {
     // Set up socket
     int sock = socket(AF_INET6, SOCK_DGRAM, 0);
     if (sock < 0) {
@@ -13,6 +13,14 @@ int listen_multicast(const uint16_t port, const char * group) {
         perror("Unable to bind");
         exit(1);
     }
+    return sock;
+}
+
+int listen_multicast(const uint16_t port, const char * group) {
+    // Open a normal UDP socket bound to a port
+    int sock = listen_udp(port);
+
+    // Add on ipv6 multicast membership
     struct ipv6_mreq group_struct;
     group_struct.ipv6mr_interface = 0;
     inet_pton(AF_INET6, group, &group_struct.ipv6mr_multiaddr);
@@ -21,16 +29,39 @@ int listen_multicast(const uint16_t port, const char * group) {
         exit(1);
     }
 
-    //printf("Bound and listening on [%s]:%d\n", group, port);
     return sock;
 }
 
-uint64_t receive_time_packet(int sock) {
+void set_recv_timeout(int sock, uint64_t timeout_ns) {
+    // Set recv timeout to 500ms
+    struct timeval tv;
+    tv.tv_sec = timeout_ns/(1000*1000*1000);
+    tv.tv_usec = (timeout_ns/1000) % (1000*1000);
+    if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+        perror("Unable to set receive timeout!");
+        exit(1);
+    }
+}
+
+uint64_t send_time_packet(int sock, const char * addr, uint16_t port) {
+    struct sockaddr_in6 dst = {AF_INET6, htons(port)};
+    inet_pton(AF_INET6, addr, &dst.sin6_addr);
+
+    uint64_t t_tx = gettime_ns();
+    if (sendto(sock, &t_tx, sizeof(uint64_t), 0, (sockaddr*)&dst, sizeof(dst)) < 0) {
+        perror("unable to sendto()");
+        exit(1);
+    }
+    return t_tx;
+}
+
+int receive_time_packet(int sock, uint64_t * t_tx_local, uint64_t * t_tx_remote, uint64_t * t_rx) {
     struct sockaddr_in6 src_addr = {0};
     socklen_t addrlen = sizeof(src_addr);
-    uint64_t recv_timestamp = 0;
-    int bytes_read = recvfrom(sock, &recv_timestamp, sizeof(uint64_t), 0, (struct sockaddr *)&src_addr, &addrlen);
-    if (bytes_read != sizeof(recv_timestamp)) {
+    uint64_t recv_timestamps[2];
+    int bytes_read = recvfrom(sock, &recv_timestamps[0], sizeof(uint64_t)*2, 0, (struct sockaddr *)&src_addr, &addrlen);
+    uint64_t _t_rx = gettime_ns();
+    if (bytes_read != sizeof(recv_timestamps)) {
         // IF we get EAGAIN, we're usually in the middle of graceful exit.
         // Return the sentinel value 0 and call it a day.
         if (errno == EAGAIN) {
@@ -42,31 +73,23 @@ uint64_t receive_time_packet(int sock) {
         exit(1);
     }
 
-    // Immediately, as fast as we can, respond on port 1554:
-    /*
-    src_addr.sin6_port = htons(1554);
-    uint64_t response_timestamps[2];
-    response_timestamps[0] = recv_timestamp;
-    response_timestamps[1] = gettime_ns();
-    int bytes_sent = sendto(sock, &response_timestamps[0], sizeof(response_timestamps), 0, (struct sockaddr *)&src_addr, addrlen);
-    if (bytes_sent != sizeof(response_timestamps)) {
-        perror("Unable to sendto()");
-        exit(1);
-    }*/
-
-    return recv_timestamp;
+    *t_tx_local = recv_timestamps[0];
+    *t_tx_remote = recv_timestamps[1];
+    *t_rx = _t_rx;
+    return 1;
 }
 
-char recv_buffer[MAX_PACKET_SIZE];
-struct popuset_packet_t packet;
-struct popuset_packet_t * receive_audio_packet(int sock, uint8_t channel_idx) {
-    int bytes_read = read(sock, recv_buffer, MAX_PACKET_SIZE);
+// We'll just assume none of our popuset packets compress so terribly that they are over 2048 bytes.
+// Typical usage shows them to be ~120 bytes on average.
+uint8_t recv_buffer[2048];
+popuset_packet_t * receive_audio_packet(int sock, uint8_t channel_idx) {
+    int bytes_read = read(sock, recv_buffer, sizeof(recv_buffer));
     if (bytes_read == 0) {
         return NULL;
     }
 
     // Unpack first a timestamp as a `uint64_t`
-    packet.timestamp = *((uint64_t *)&recv_buffer[0]);
+    uint64_t timestamp = *((uint64_t *)&recv_buffer[0]);
 
     // Take a look at the channels given:
     uint8_t channels_in_packet = *((uint8_t *)&recv_buffer[sizeof(uint64_t)]);
@@ -82,7 +105,6 @@ struct popuset_packet_t * receive_audio_packet(int sock, uint8_t channel_idx) {
         our_data_offset += data_lens[c];
     }
 
-    // Next, we extract the channel we attend to
-    packet.decoded_data = decode_frame(recv_buffer + our_data_offset, data_lens[channel_idx]);
-    return &packet;
+    // Next, we extract the channel we attend to and queue a packet
+    return queue_packet(timestamp, recv_buffer + our_data_offset, data_lens[channel_idx]);
 }

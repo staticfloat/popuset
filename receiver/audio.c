@@ -1,6 +1,6 @@
 #include "receiver.h"
 
-// Open a blocking PCM device with samplerate 48KHz, 
+/*
 snd_pcm_t * open_device(const char * device) {
     snd_pcm_t * handle = NULL;
     int err = snd_pcm_open(&handle, device, SND_PCM_STREAM_PLAYBACK, 0);
@@ -9,6 +9,7 @@ snd_pcm_t * open_device(const char * device) {
         exit(1);
     }
 
+    const int device_bufflens = 4;
     err = snd_pcm_set_params(
         handle,
         SND_PCM_FORMAT_FLOAT_LE,
@@ -16,56 +17,146 @@ snd_pcm_t * open_device(const char * device) {
         1,
         SAMPLERATE,
         0,
-        BUFFSIZE*1000000/SAMPLERATE
+        device_bufflens*(BUFFSIZE*1000000/SAMPLERATE)
     );
     if (err < 0) {
         printf("Playback set format: %s\n", snd_strerror(err));
         exit(1);
     }
 
-    err = snd_pcm_prepare(handle);
+    snd_async_handler_t *pcm_callback;
+    err = snd_async_add_pcm_handler(&pcm_callback, handle, (snd_async_callback_t)&mixer_callback, NULL);
     if (err < 0) {
-        printf("PCM preparation: %s\n", snd_strerror(err));
+        printf("PCM handler: %s\n", snd_strerror(err));
+        exit(1);
+    }
+
+    // Write some initial zeros to get things started
+    commit_zerobuff(handle);
+    commit_zerobuff(handle);
+
+    err = snd_pcm_start(handle);
+    if (err < 0) {
+        printf("PCM start: %s\n", snd_strerror(err));
         exit(1);
     }
     return handle;
-}
+}*/
 
-void close_device(snd_pcm_t * handle) {
-    snd_pcm_close(handle);
-    handle = NULL;
-}
-
-long commit_buffer(snd_pcm_t * handle, const float * buffer) {
-    int frames_written = snd_pcm_writei(handle, buffer, BUFFSIZE);
-    if (frames_written < 0) {
-        frames_written = snd_pcm_recover(handle, frames_written, 0);
+// Initialize Port streams for the given device
+PaStream * open_device() {
+    PaError err = Pa_Initialize();
+    if (err != paNoError) {
+        fprintf(stderr, "Could not initialize portaudio: %s\n", Pa_GetErrorText(err));
+        exit(1);
     }
-    if (frames_written < 0) {
-        printf("snd_pcm_writei(): %s\n", snd_strerror(frames_written));
-    } else if (frames_written != BUFFSIZE) {
-        printf("Only wrote %d frames!\n");
+
+    PaStream * stream = NULL;
+    err = Pa_OpenDefaultStream(
+        &stream,
+        0,
+        1,
+        paFloat32,
+        SAMPLERATE,
+        BUFFSIZE,
+        &mixer_callback,
+        NULL
+    );
+
+    if (err != paNoError) {
+        fprintf(stderr, "Could not open stream: %s\n", Pa_GetErrorText(err));
+        exit(1);
     }
-    return get_delay(handle);
+
+    // Start the stream, spawning off a thread to run the callbacks from.
+    err = Pa_StartStream(stream);
+    if (err != paNoError) {
+        fprintf(stderr, "Could not start stream: %s\n", Pa_GetErrorText(err));
+        exit(1);
+    }
+
+    return stream;
 }
 
-long get_delay(snd_pcm_t * handle) {
+void close_device(PaStream * stream) {
+    Pa_CloseStream(stream);
+    stream = NULL;
+}
+
+/*
+long get_committed_samples(snd_pcm_t * handle) {
     int err;
-    long delay = 0;
+    long num_samples = 0;
     
-    err = snd_pcm_delay(handle, &delay);
-    if (err < 0) {
+    err = snd_pcm_delay(handle, &num_samples);
+    if (err < 0 && err != -EPIPE) {
         printf("Get delay: %s\n", snd_strerror(err));
         return 0;
     }
-    return delay;
+    return num_samples;
 }
 
-// Calculate the root mean square of a buffer
-float rms(float * buffer) {
-    float accum = 0.0f;
-    for (int i=0; i<BUFFSIZE; ++i) {
-        accum += buffer[i]*buffer[i];
+/*
+void commit_buffer(snd_pcm_t * handle, const float * buffer) {
+    int written = 0;
+    while (written < BUFFSIZE) {
+        int frames_written = snd_pcm_writei(handle, buffer + written, BUFFSIZE - written);
+        // If -EAGAIN, then just try again
+        if (frames_written == -EAGAIN)
+            continue;
+        if (frames_written == -EPIPE) {
+            // underrun
+            int err = snd_pcm_prepare(handle);
+            if (err < 0) {
+                printf("PCM recovery preparation: %s\n", snd_strerror(err));
+                exit(1);
+            }
+            continue;
+        }
+        if (frames_written < 0) {
+            printf("snd_pcm_writei(): %s\n", snd_strerror(frames_written));
+            return;
+        }
+        written += frames_written;
     }
-    return sqrtf(accum/BUFFSIZE);
+}
+*/
+
+/*
+void commit_buffer(snd_pcm_t * handle, const float * buffer) {
+    int written = 0;
+    while (written < BUFFSIZE) {
+        int frames_written = snd_pcm_writei(handle, buffer + written, BUFFSIZE - written);
+        if (frames_written < 0)
+            frames_written = snd_pcm_recover(handle, frames_written, 0);
+        if (frames_written < 0) {
+            printf("snd_pcm_writei(): %s\n", snd_strerror(frames_written));
+            return;
+        }
+        written += frames_written;
+    }
+}
+
+const float zero_buff[BUFFSIZE] = {0.0};
+void commit_zerobuff(snd_pcm_t * handle) {
+    commit_buffer(handle, zero_buff);
+}
+*/
+
+OpusDecoder *dec;
+void create_decoder(void) {
+    int error = 0;
+    dec = opus_decoder_create(SAMPLERATE, 1, &error);
+    if (error < 0) {
+        fprintf(stderr, "failed to create decoder: %s\n", opus_strerror(error));
+        exit(1);
+    }
+}
+
+int decode_frame(const unsigned char * encoded_data, unsigned int encoded_data_len, float * decoded_data, int fec) {
+    int samples_decoded = opus_decode_float(dec, encoded_data, encoded_data_len, decoded_data, BUFFSIZE, fec);
+    if (samples_decoded != BUFFSIZE) {
+        printf("samples_decoded was %d, instead of expected %d!\n", samples_decoded, BUFFSIZE);
+    }
+    return samples_decoded;
 }

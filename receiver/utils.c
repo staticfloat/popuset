@@ -1,20 +1,5 @@
 #include "receiver.h"
 
-
-struct popuset_packet_t sinpack;
-float sindata[BUFFSIZE];
-struct popuset_packet_t * generate_sin_packet() {
-    sinpack.timestamp = 0;
-    sinpack.decoded_data = &sindata[0];
-    return &sinpack;
-}
-
-void init_sindata(float freq) {
-    for (int i=0; i<BUFFSIZE; ++i) {
-        sindata[i] = 0.8f*sinf(freq*i*2*M_PI/480.0f);
-    }
-}
-
 // Setup signal handling
 void catch_signal(void (*callback)(int), int signum) {
     struct sigaction sigIntHandler;
@@ -22,6 +7,19 @@ void catch_signal(void (*callback)(int), int signum) {
     sigemptyset(&sigIntHandler.sa_mask);
     sigIntHandler.sa_flags = 0;
     sigaction(signum, &sigIntHandler, NULL);
+}
+
+void handle_sigterm(int signum) {
+    printf("_ Shutting down forcefully...\n");
+    exit(1);
+}
+
+void handle_sigint(int signum) {
+    // If someone tries to do this again, exit immediately
+    catch_signal(&handle_sigterm, SIGINT);
+
+    printf("_ Shutting down gracefully...\n");
+    post_semaphore(&continue_running);
 }
 
 // Semaphore utility functions

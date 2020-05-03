@@ -3,19 +3,19 @@ all: build/receiver
 SOURCES = $(foreach S,$(wildcard receiver/*.c),$(notdir $(S)))
 OBJECTS = $(patsubst %.c,build/%.o,$(SOURCES))
 CFLAGS = -O2 -g
-LDFLAGS = -lasound -lopus -lm -lpthread
+LDFLAGS = -lportaudio -lopus -lm -lpthread
 
 build:
 	mkdir -p $@
 
 build/%.o: receiver/%.c receiver/receiver.h | build
-	$(CC) -c  -o $@ $(CFLAGS) $<
+	$(CXX) -c  -o $@ $(CFLAGS) $<
 
 build/receiver: $(OBJECTS)
-	$(CC) -o $@ $(LDFLAGS) $^
+	$(CXX) -o $@ $(LDFLAGS) $^
 
 run: build/receiver
-	sudo build/receiver
+	build/receiver
 
 gdb: build/receiver
 	gdb --args build/receiver

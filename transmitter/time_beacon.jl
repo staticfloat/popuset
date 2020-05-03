@@ -1,3 +1,4 @@
+#!/usr/bin/env julia
 @info("Loading libraries")
 using Sockets, Statistics, Printf
 
@@ -13,31 +14,44 @@ mutable struct timespec
 end
 
 function gettime_ns()
-    # Call clock_gettime(CLOCK_REALTIME, &tx)
+    # Call clock_gettime() with realtime or monotonic or something
     tx = timespec(0,0)
-    s = ccall((:clock_gettime,:librt), Int32, (Int32, Ptr{timespec}), 0, Ref(tx))
+    CLOCK_REALTIME = 0
+    CLOCK_MONOTONIC = 1
+    s = ccall((:clock_gettime,:librt), Int32, (Int32, Ptr{timespec}), CLOCK_REALTIME, Ref(tx))
     if s < 0
         error("Unable to call clock_gettime()")
     end
-    return tx.sec*UInt64(1e9) + tx.nsec
+    return UInt64(tx.sec*UInt64(1e9) + tx.nsec)
+end
+
+function join_group(sock::UDPSocket, addr)
+    UV_JOIN_GROUP = Cint(1)
+    r = ccall(:uv_udp_set_membership, Cint, (Ptr{Cvoid}, Cstring, Cstring, Cint), sock.handle, string(addr), C_NULL, UV_JOIN_GROUP)
+    if r != 0
+        throw(Base.IOError("uv_udp_set_membership", r))
+    end
+    return
 end
 
 let
     @info("Creating socket")
-    tx_sock = UDPSocket()
-    bind(tx_sock, ip"::", 0; reuseaddr=false, ipv6only=true)
-    Sockets.setopt(tx_sock, enable_broadcast=true)
-
     packets_sent = 0
-    multicast_addr = ip"ff12:5040::1337:0"
-    multicast_port = 1554
+    multicast_addr = ip"ff12:5041::1337:0"
+    time_port = 1554
+    
+    sock = UDPSocket()
+    bind(sock, ip"fd37:5041::1", time_port; reuseaddr=false, ipv6only=true)
+    join_group(sock, multicast_addr)
+
+    @info("Listening")
     while true
         try
-            t_curr = gettime_ns()
-            send(tx_sock, multicast_addr, multicast_port, [t_curr])
-            packets_sent += 1
-            println(@sprintf("0x%llx,", t_curr))
-            sleep(.2)
+            src_addr, data = recvfrom(sock)
+            t_rx = gettime_ns()
+            t_tx_speaker = reinterpret(UInt64, data)[1]
+            send(sock, src_addr.host, src_addr.port, UInt64[UInt64(t_rx), UInt64(t_tx_speaker)])
+            println("[0x$(string(t_rx, base=16))] Sent a pong to [$(src_addr.host)]:$(src_addr.port)")
         catch e
             if isa(e, InterruptException)
                 break
@@ -46,6 +60,6 @@ let
             end
         end
     end
-    close(tx_sock)
+    close(sock)
 end
 
