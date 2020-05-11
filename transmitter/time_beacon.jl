@@ -41,7 +41,7 @@ let
     time_port = 1554
     
     sock = UDPSocket()
-    bind(sock, ip"fd37:5041::1", time_port; reuseaddr=false, ipv6only=true)
+    bind(sock, ip"::", time_port; reuseaddr=false, ipv6only=true)
     join_group(sock, multicast_addr)
 
     @info("Listening")

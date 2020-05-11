@@ -1,5 +1,6 @@
 #include "receiver.h"
 #include "math.hpp"
+#include <time.h>
 
 #define TIMESTAMP_MEMORY    100
 uint64_t t_rxs[TIMESTAMP_MEMORY] = {0};
@@ -57,7 +58,6 @@ void insert_timestamps(uint64_t t_tx_local, uint64_t t_tx_remote, uint64_t t_rx)
 
 
 void timesync_update(uint64_t t_tx_local, uint64_t t_tx_remote, uint64_t t_rx) {
-    printf("timesync_update()!\n");
     // Only do timestamp calculation if we have enough points stored up
     if (num_timestamps > 20) {
         // First, we want to estimate minimum round-trip delay.  We do so by looking at the

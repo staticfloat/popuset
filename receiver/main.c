@@ -1,4 +1,5 @@
 #include "receiver.h"
+#include <sys/socket.h>
 
 // Eventually these should be configured, not hardcoded
 #define SPEAKER_GROUP_IDX       0
@@ -41,13 +42,12 @@ void * time_pong_thread(void * sock_ptr) {
     while (should_continue()) {
         uint64_t t_tx_local = 0, t_tx_remote = 0, t_rx = 0;
         if (receive_time_packet(sock, &t_tx_local, &t_tx_remote, &t_rx) == 0) {
-            printf("[TR] can't receive time packet!\n");
             continue;
         }
 
         // Ignore out-of-order packets
         if (t_tx_local != last_t_tx) {
-            printf("[TR] %d != %d\n", t_tx_local, last_t_tx);
+            printf("[TR] 0x%llx != 0x%llx\n", t_tx_local, last_t_tx);
             continue;
         }
 
@@ -59,19 +59,29 @@ void * time_pong_thread(void * sock_ptr) {
 }
 
 void * audio_thread(void * sock_ptr) {
-    printf("[A] - STARTING\n");
+    printf("[AR] - STARTING\n");
     int sock = *(int *)sock_ptr;
-    PaStream * audio_device = open_device();
+    void * audio_device = open_device();
 
+    // Since we do other things like GC and whatnot, we'll timeout if we haven't received a packet in 20ms.
+    set_recv_timeout(sock, 20*1000000);
+
+    uint64_t timestamps_to_request[NUM_PACKETS] = {0};
     while (should_continue()) {
         // Receive the next audio packet
-        struct popuset_packet_t * packet = receive_audio_packet(sock, CHANNEL_IDX);
-        if (packet == NULL)
-            continue;
+        receive_audio_packet(sock, CHANNEL_IDX);
+
+        // Scan through packets, looking for FEC holes to request from the master;
+        uint8_t num_requests = scan_fec_packets(timestamps_to_request);
+        //if (num_requests > 0)
+        //    request_timestamps(timestampts_to_request, num_requests);
+
+        // cleanup old packets here too
+        gc_packets();
     }
 
     close_device(audio_device);
-    printf("[A] - CLOSING\n");
+    printf("[AR] - CLOSING\n");
     return NULL;
 }
 
@@ -80,7 +90,6 @@ int main(void) {
     catch_signal(&handle_sigint, SIGINT);
     catch_signal(&handle_sigterm, SIGTERM);
     init_semaphore(&continue_running);
-    create_decoder();
     init_mixer();
 
     // Open sockets (we do so here, so that we can close 'em on the thread's stupid faces)
@@ -95,8 +104,6 @@ int main(void) {
     pthread_create(&time_pong_thread_handle, NULL, &time_pong_thread, &time_socket);
     pthread_t audio_thread_handle;
     pthread_create(&audio_thread_handle, NULL, &audio_thread, &audio_socket);
-    //pthread_t mix_thread_handle;
-    // /pthread_create(&mix_thread_handle, NULL, &mix_thread, NULL);
     
     // Wait for someone to give us a SIGINT
     sem_wait(&continue_running);

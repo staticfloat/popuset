@@ -1,4 +1,7 @@
 #include "receiver.h"
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 int listen_udp(const uint16_t port) {
     // Set up socket
@@ -73,8 +76,8 @@ int receive_time_packet(int sock, uint64_t * t_tx_local, uint64_t * t_tx_remote,
         exit(1);
     }
 
-    *t_tx_local = recv_timestamps[0];
-    *t_tx_remote = recv_timestamps[1];
+    *t_tx_local = recv_timestamps[1];
+    *t_tx_remote = recv_timestamps[0];
     *t_rx = _t_rx;
     return 1;
 }
@@ -82,10 +85,10 @@ int receive_time_packet(int sock, uint64_t * t_tx_local, uint64_t * t_tx_remote,
 // We'll just assume none of our popuset packets compress so terribly that they are over 2048 bytes.
 // Typical usage shows them to be ~120 bytes on average.
 uint8_t recv_buffer[2048];
-popuset_packet_t * receive_audio_packet(int sock, uint8_t channel_idx) {
+void receive_audio_packet(int sock, uint8_t channel_idx) {
     int bytes_read = read(sock, recv_buffer, sizeof(recv_buffer));
-    if (bytes_read == 0) {
-        return NULL;
+    if (bytes_read <= 0) {
+        return;
     }
 
     // Unpack first a timestamp as a `uint64_t`
@@ -95,7 +98,7 @@ popuset_packet_t * receive_audio_packet(int sock, uint8_t channel_idx) {
     uint8_t channels_in_packet = *((uint8_t *)&recv_buffer[sizeof(uint64_t)]);
     if (channel_idx > channels_in_packet) {
         printf("Assigned to channel %d, but only received %d\n");
-        return NULL;
+        return;
     }
 
     // Determine the offset to our data and our data length
@@ -106,5 +109,5 @@ popuset_packet_t * receive_audio_packet(int sock, uint8_t channel_idx) {
     }
 
     // Next, we extract the channel we attend to and queue a packet
-    return queue_packet(timestamp, recv_buffer + our_data_offset, data_lens[channel_idx]);
+    queue_packet(timestamp, recv_buffer + our_data_offset, data_lens[channel_idx]);
 }
