@@ -1,0 +1,11 @@
+[Unit]
+Description=popusetNET interface
+After=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash /home/pi/src/popuset/config/popusetnet.sh
+
+[Install]
+WantedBy=multi-user.target

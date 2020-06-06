@@ -12,6 +12,7 @@ int listen_udp(const uint16_t port) {
     }
     // bind to port
     struct sockaddr_in6 address = {AF_INET6, htons(port)};
+    inet_pton(AF_INET6, "fe80::216:3eff:fec3:3c22", (void *)&socket_struct.sin6_addr.s6_addr);
     if (bind(sock, (struct sockaddr*)&address, sizeof(address)) < 0) {      
         perror("Unable to bind");
         exit(1);
@@ -29,6 +30,13 @@ int listen_multicast(const uint16_t port, const char * group) {
     inet_pton(AF_INET6, group, &group_struct.ipv6mr_multiaddr);
     if (setsockopt(sock, IPPROTO_IPV6, IPV6_ADD_MEMBERSHIP, &group_struct, sizeof(group_struct)) < 0) {
         perror("Unable to join membership");
+        exit(1);
+    }
+
+    // Disable multiast loopback
+    int opt = 0;
+    if (setsockopt(sock, IPPROTO_IPV6, IPV6_MULTICAST_LOOP, &opt, sizeof(opt)) < 0) {
+        perror("Unable to disable multicast loopback");
         exit(1);
     }
 
@@ -84,30 +92,53 @@ int receive_time_packet(int sock, uint64_t * t_tx_local, uint64_t * t_tx_remote,
 
 // We'll just assume none of our popuset packets compress so terribly that they are over 2048 bytes.
 // Typical usage shows them to be ~120 bytes on average.
-uint8_t recv_buffer[2048];
+struct popuset_packet_header_t {
+    uint64_t timestamp;
+    uint16_t channels_included;
+    uint16_t channel_offset;
+};
+
+// Ridiculously large receive buffer; most usage is <1kb, but let's be ready for huge numbers of channels in the future. ;)
+uint8_t recv_buffer[64000];
 void receive_audio_packet(int sock, uint8_t channel_idx) {
     int bytes_read = read(sock, recv_buffer, sizeof(recv_buffer));
     if (bytes_read <= 0) {
         return;
     }
 
-    // Unpack first a timestamp as a `uint64_t`
-    uint64_t timestamp = *((uint64_t *)&recv_buffer[0]);
+    // First, unpack the header:
+    popuset_packet_header_t * packet_header = (popuset_packet_header_t *)recv_buffer;
 
-    // Take a look at the channels given:
-    uint8_t channels_in_packet = *((uint8_t *)&recv_buffer[sizeof(uint64_t)]);
-    if (channel_idx > channels_in_packet) {
-        printf("Assigned to channel %d, but only received %d\n");
+    // Check that our channel is included in the packet:
+    if ((channel_idx < packet_header->channel_offset) ||
+        (channel_idx >= (packet_header->channel_offset + packet_header->channels_included))) {
         return;
     }
 
     // Determine the offset to our data and our data length
-    uint16_t * data_lens = (uint16_t *)(&recv_buffer[sizeof(uint64_t) + sizeof(uint8_t)]);
-    uint16_t our_data_offset = sizeof(uint64_t) + sizeof(uint8_t) + sizeof(uint16_t)*channels_in_packet;
-    for( uint8_t c = 0; c < channel_idx; ++c ) {
+    uint16_t * data_lens = (uint16_t *)(&recv_buffer[sizeof(popuset_packet_header_t)]);
+    uint16_t our_data_offset = sizeof(popuset_packet_header_t) + sizeof(uint16_t)*packet_header->channels_included;
+    for (uint16_t c = 0; c < (channel_idx - packet_header->channel_offset); ++c) {
         our_data_offset += data_lens[c];
     }
 
+    // Uncomment this for debugging of data going missing/getting duplicated.  :P
+    //uint32_t enc_hash = 0;
+    //crc32(recv_buffer + our_data_offset, data_lens[channel_idx], &enc_hash);
+    //printf("[R] Received packet %llx with payload length %d, payload hash %x\n", timestamp, data_lens[channel_idx], enc_hash);
+
     // Next, we extract the channel we attend to and queue a packet
     queue_packet(timestamp, recv_buffer + our_data_offset, data_lens[channel_idx]);
+}
+
+void request_timestamps(int sock, const char * addr, uint16_t port, uint64_t * timestamps, uint8_t num_timestamps) {
+    struct sockaddr_in6 dst = {AF_INET6, htons(port)};
+    inet_pton(AF_INET6, addr, &dst.sin6_addr);
+
+    for (int idx=0; idx<num_timestamps; ++idx) {
+        if (sendto(sock, &timestamps[idx], sizeof(uint64_t), 0, (sockaddr*)&dst, sizeof(dst)) < 0) {
+            perror("unable to sendto()");
+            exit(1);
+        }
+    }
 }

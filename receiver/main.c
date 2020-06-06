@@ -2,11 +2,12 @@
 #include <sys/socket.h>
 
 // Eventually these should be configured, not hardcoded
-#define SPEAKER_GROUP_IDX       0
-#define CHANNEL_IDX             0
-#define AUDIO_PORT              5040
-#define TIMESYNC_PORT           1554
-#define SPEAKER_GROUP_ADDR(idx) "ff12:5041::1337:" STRINGIFY(idx)
+#define SPEAKER_GROUP_IDX               0
+#define CHANNEL_IDX                     0
+#define AUDIO_PORT                      1554
+#define TIMESYNC_PORT                   1555
+#define SPEAKER_GROUP_ADDR(idx)         "ff12:5041::1337:" STRINGIFY(idx)
+#define SPEAKER_ADDR(group, channel)    "fd37:5041::" STRINGIFY(group) ":" STRINGIFY(speaker)
 
 uint64_t last_t_tx = 0;
 void * time_ping_thread(void * sock_ptr) {
@@ -67,17 +68,24 @@ void * audio_thread(void * sock_ptr) {
     set_recv_timeout(sock, 20*1000000);
 
     uint64_t timestamps_to_request[NUM_PACKETS] = {0};
+    uint64_t last_fec_ask = 0;
     while (should_continue()) {
         // Receive the next audio packet
         receive_audio_packet(sock, CHANNEL_IDX);
 
-        // Scan through packets, looking for FEC holes to request from the master;
-        uint8_t num_requests = scan_fec_packets(timestamps_to_request);
-        //if (num_requests > 0)
-        //    request_timestamps(timestampts_to_request, num_requests);
-
-        // cleanup old packets here too
+        // cleanup old packets before asking for more
         gc_packets();
+
+        // Scan through packets, looking for FEC holes to request from the master, but only if at least 2ms has passed
+        // since the last time we asked:
+        uint8_t num_requests = scan_fec_packets(timestamps_to_request);
+        if (num_requests > 0) {
+            uint64_t curr_time = gettime_ns();
+            if (curr_time > last_fec_ask + 2*1000*1000) {
+                request_timestamps(sock, SPEAKER_GROUP_ADDR(SPEAKER_GROUP_IDX), AUDIO_PORT, timestamps_to_request, num_requests);
+            }
+            last_fec_ask = curr_time;
+        }
     }
 
     close_device(audio_device);

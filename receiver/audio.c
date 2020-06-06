@@ -50,6 +50,10 @@ void create_decoder(void * dec) {
 }
 
 void snapshot_decoder(void * src, void * dst) {
+    // There are a few times where this might happen (such as during FEC re-decoding),
+    // so let's make life easy on ourselves and not invoke undefined behavior.
+    if (src == dst)
+        return;
     memcpy(dst, src, opus_decoder_get_size(1));
 }
 

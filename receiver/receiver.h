@@ -16,6 +16,27 @@
 #define STRINGIFY(x)        #x
 
 
+struct popuset_config_t {
+    // Speaker groups are independent, each one has its own broadcast subnet
+    uint16_t speaker_group;
+    char speaker_group_addr[40];
+
+    // Within a speaker group, different audio streams are assigned to channels
+    uint16_t channel;
+
+    // Within a channel, different speakers assigned to the same channel are
+    // assigned a different subchannel
+    uint16_t subchannel;
+
+    // Combine all of the above together, and you get an ipv6 addresss!
+    char speaker_addr[40];
+
+    // Configuring some basic properties
+    uint16_t audio_port;
+    uint16_t timesync_port;
+} popuset_config;
+
+
 struct popuset_packet_t {
     // Timestamp of when to present first sample, expressed in ns since the unix epoch
     uint64_t timestamp;
@@ -41,6 +62,7 @@ void snapshot_decoder(void * src, void * dst);
 // mixing
 void init_mixer();
 int packets_queued();
+int packets_queued(uint64_t after_timestamp);
 void queue_packet(uint64_t timestamp, const uint8_t * enc_data, const int enc_datalen);
 const popuset_packet_t * next_packet();
 int mixer_callback( const void *inputBuffer, void *outputBuffer, unsigned long framesPerBuffer, const void* timeInfo, unsigned long statusFlags, void *userData);
@@ -53,7 +75,8 @@ int listen_multicast(const uint16_t port, const char * group);
 void set_recv_timeout(int sock, uint64_t timeout_ns);
 uint64_t send_time_packet(int sock, const char * addr, uint16_t port);
 int receive_time_packet(int sock, uint64_t * t_tx_local, uint64_t * t_tx_remote, uint64_t * t_rx);
-void receive_audio_packet(int socket, uint8_t channel_idx);
+void receive_audio_packet(int sock, uint8_t channel_idx);
+void request_timestamps(int sock, const char * addr, uint16_t port, uint64_t * timestamps, uint8_t num_timestamps);
 
 // Time stuff
 uint64_t gettime_ns();
@@ -71,3 +94,5 @@ extern sem_t continue_running;
 void init_semaphore(sem_t * s);
 void post_semaphore(sem_t * s);
 int should_continue();
+
+void crc32(const void *data, size_t n_bytes, uint32_t* crc);
