@@ -1,5 +1,5 @@
 @info("Loading libraries")
-using Sockets, Opus, FileIO, LibSndFile, Statistics, Printf
+using Sockets, Opus, FileIO, LibSndFile, Statistics, Printf, ZeroMQ
 POPUSET_DIR = dirname(@__DIR__)
 
 include("config.jl")

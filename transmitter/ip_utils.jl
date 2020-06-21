@@ -1,3 +1,20 @@
+# Define draft socket types until ZMQ merges https://github.com/JuliaInterop/ZMQ.jl/pull/206
+# using ZMQ.Draft
+
+# const SERVER = 12
+# const CLIENT = 13
+# const RADIO = 14
+# const DISH = 15
+# const GATHER = 16
+# const SCATTER = 17
+# const DGRAM = 18
+
+# function open_multicast_socket(port)
+#     sock = Socket(PUB)
+#     bind(sock, "tcp://*:$(port)")
+
+# end
+
 # This function will be included in Julia 1.5+ (https://github.com/JuliaLang/julia/pull/35521)
 function join_multicast_group(sock::UDPSocket, addr)
     UV_JOIN_GROUP = Cint(1)

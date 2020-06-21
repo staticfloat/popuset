@@ -34,6 +34,10 @@ mount_img() {
         unzip "${ZIPFILE}" -d "${SOURCE_DIR}/downloads"
         mkdir -p $(dirname ${IMGFILE})
         mv "${TEMP_IMG}" "${IMGFILE}"
+
+        # We extend the image by 1GB here, as we want some space to work with
+        dd if=/dev/zero bs=1M count=1024 >> "${IMGFILE}"
+        parted "${IMGFILE}" resizepart 2 100%
     fi
 
     # Determine the sector size for the image: (should be 512)
@@ -47,6 +51,12 @@ mount_img() {
 
     # First, mount root directory
     sudo mount -o "loop,rw,sync,offset=${ROOT_OFFSET},sizelimit=${ROOT_SIZE}" "${IMGFILE}" "${ROOT}"
+
+    # After mounting we've got a loopback device that we acn use to expand the root partition,
+    # since we typically add some extra space during extraction above:
+    LOOP_DEVICE=$(df | grep "${ROOT}" | awk '{print $1}' | head -1)
+    sudo resize2fs "${LOOP_DEVICE}"
+
     # Next, mount boot directory
     sudo mount -o "loop,rw,sync,offset=${BOOT_OFFSET},sizelimit=${BOOT_SIZE}" "${IMGFILE}" "${ROOT}/boot"
 
@@ -100,6 +110,7 @@ deploy_kernel() {
     KERNEL_TARBALL=$(echo ${SOURCE_DIR}/kernel/products/Linux-${CONFIG}.v*.tar.gz)
 
     # Extract kernel to temporary directory
+    echo "Extracting and installing kernel..."
     TMPDIR=$(mktemp -d)
     tar -C "${TMPDIR}" -zxf "${KERNEL_TARBALL}"
     
@@ -122,7 +133,7 @@ deploy_kernel() {
     sudo cp -r ${TMPDIR}/usr/src/${SDIR} ${ROOT}/usr/src/
 
     # Cleanup temporary kernel extraction directory
-    rm -rf "${TMPDIR}"
+    sudo rm -rf "${TMPDIR}"
 }
 
 deploy_packages() {
@@ -135,10 +146,18 @@ deploy_packages() {
     ROOT="${SOURCE_DIR}/mounts/${CONFIG}"
 
     # Deploy first the config-dependent package install script
+    echo "Installing packages..."
     qemu_launch_script "${ROOT}" "${SOURCE_DIR}/packages/${SCRIPT}"
 
-    # Next, do common things like install wireguard-tools
+    # Next, do common things like install wireguard-tools, reconfigure kernel sources, etc...
+    qemu_launch_script "${ROOT}" "${SOURCE_DIR}/packages/kernel_sources.sh"
     qemu_launch_script "${ROOT}" "${SOURCE_DIR}/packages/wireguard-tools.sh"
+
+    # Add popusetNET configs and enable them
+    mkdir -p ${ROOT}/usr/local/bin
+    sudo cp -r ${SOURCE_DIR}/packages/popusetnet_config/*.sh ${ROOT}/usr/local/bin/
+    sudo cp -r ${SOURCE_DIR}/packages/popusetnet_config/*.service ${ROOT}/lib/systemd/system/
+    qemu_launch_script "${ROOT}" "${SOURCE_DIR}/packages/popusetnet_enable.sh"
 }
 
 build_img() {
@@ -148,6 +167,8 @@ build_img() {
         exit 1
     fi
 
+    echo "Building base image for configuration ${CONFIG}"
+
     download_img
     mount_img "${CONFIG}"
 
@@ -155,5 +176,8 @@ build_img() {
     deploy_kernel "${CONFIG}"
 
     # Next, install packages (which packages depends on the config)
-    deploy_packages "${CONFIG}"    
+    deploy_packages "${CONFIG}"
+
+    # unmount the image!  (Eventually, we'll probably want to shrink this somehow)
+    unmount_img "${CONFIG}"
 }

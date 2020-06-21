@@ -9,9 +9,8 @@ if [[ -n $(which wg-quick) ]]; then
 fi
 
 mkdir -p /tmp/wireguard-tools
-curl -L "${url}" -o - | tar -Jx --strip-components=1 -C /tmp/wireguard-tools
+curl -# -L "${url}" -o - | tar -Jx --strip-components=1 -C /tmp/wireguard-tools
 pushd /tmp/wireguard-tools/src
-ls -la
 make WITH_BASHCOMPLETION=yes WITH_SYSTEMDUNITS=yes WITH_WGQUICK=yes -j $(nproc)
 make WITH_BASHCOMPLETION=yes WITH_SYSTEMDUNITS=yes WITH_WGQUICK=yes install
 popd
