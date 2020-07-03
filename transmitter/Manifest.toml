@@ -148,9 +148,9 @@ uuid = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
 
 [[Libiconv_jll]]
 deps = ["Libdl", "Pkg"]
-git-tree-sha1 = "e5256a3b0ebc710dbd6da0c0b212164a3681037f"
+git-tree-sha1 = "c9d4035d7481bcdff2babf5a55525a818ef8ed8f"
 uuid = "94ce4f54-9a6c-5748-9c1c-f9c7231a4531"
-version = "1.16.0+2"
+version = "1.16.0+5"
 
 [[LinearAlgebra]]
 deps = ["Libdl"]
@@ -230,6 +230,14 @@ deps = ["Intervals", "LinearAlgebra", "RecipesBase"]
 git-tree-sha1 = "05f4b8b55595b86b252b28fb1e7c402fb4df98d2"
 uuid = "f27b6e38-b328-58d1-80ce-0feddd5e7a45"
 version = "1.1.1"
+
+[[PortAudio]]
+deps = ["Libdl", "LinearAlgebra", "SampledSignals", "libportaudio_jll"]
+git-tree-sha1 = "6d0b55a02f6479f95681790004f5a86e8fa3393b"
+repo-rev = "master"
+repo-url = "https://github.com/JuliaAudio/PortAudio.jl"
+uuid = "80ea8bcb-4634-5cb3-8ee8-a132660d1d2d"
+version = "1.1.0"
 
 [[Printf]]
 deps = ["Unicode"]
@@ -330,9 +338,9 @@ version = "0.17.0"
 
 [[XML2_jll]]
 deps = ["Libdl", "Libiconv_jll", "Pkg", "Zlib_jll"]
-git-tree-sha1 = "987c02a43fa10a491a5f0f7c46a6d3559ed6a8e2"
+git-tree-sha1 = "6b2ffe6728bdba991da4fc1aa5980a53db46a23f"
 uuid = "02c8fc9c-b97f-50b9-bbe4-9be30ff0a78a"
-version = "2.9.9+4"
+version = "2.9.9+5"
 
 [[ZMQ]]
 deps = ["FileWatching", "Sockets", "ZeroMQ_jll"]
@@ -348,9 +356,21 @@ version = "4.3.2+4"
 
 [[Zlib_jll]]
 deps = ["Libdl", "Pkg"]
-git-tree-sha1 = "a2e0d558f6031002e380a90613b199e37a8565bf"
+git-tree-sha1 = "622d8b6dc0c7e8029f17127703de9819134d1b71"
 uuid = "83775a58-1f1d-513f-b197-d71354ab007a"
-version = "1.2.11+10"
+version = "1.2.11+14"
+
+[[alsa_jll]]
+deps = ["Libdl", "Pkg"]
+git-tree-sha1 = "04ec50d2469ab57b512f0edc6bd56cc049daeee4"
+uuid = "45378030-f8ea-5b20-a7c7-1a9d95efb90e"
+version = "1.2.1-1+1"
+
+[[libportaudio_jll]]
+deps = ["Libdl", "Pkg", "alsa_jll"]
+git-tree-sha1 = "7a5bcc2dcdce9ff8565768761ab3331a8a73b104"
+uuid = "2d7b7beb-0762-5160-978e-1ab83a1e8a31"
+version = "19.6.0+2"
 
 [[libsndfile_jll]]
 deps = ["FLAC_jll", "Libdl", "Ogg_jll", "Pkg", "libvorbis_jll"]

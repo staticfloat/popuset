@@ -8,6 +8,15 @@ include("timesync.jl")
 include("ip_utils.jl")
 include("audiofile.jl")
 
+struct Transmitter
+    audio_source::
+    sock::Socket
+end
+
+function run_transmitter_loop(tx::Transmitter)
+    
+end
+
 # Start up the packet cache and timesync
 timesync_sock = open_multicast_socket(timesync_port)
 task_timesync = run_timesync(timesync_sock; verbose=true)
