@@ -1,27 +1,5 @@
 using Sockets, Statistics, Printf, Base.Threads
 
-if Base.Sys.WORD_SIZE==32
-    time_t = Clong
-elseif Base.Sys.WORD_SIZE==64
-    time_t = Clonglong
-end
-
-mutable struct timespec
-    sec::time_t
-    nsec::Clong
-end
-
-function gettime_ns()
-    # Call clock_gettime() with realtime
-    tx = timespec(0,0)
-    CLOCK_REALTIME = 0
-    s = ccall((:clock_gettime,:librt), Int32, (Int32, Ptr{timespec}), CLOCK_REALTIME, Ref(tx))
-    if s < 0
-        error("Unable to call clock_gettime(): $(s)")
-    end
-    return UInt64(tx.sec*UInt64(1e9) + tx.nsec)
-end
-
 function run_timesync(time_sock::UDPSocket; verbose::Bool = false)
     Threads.@spawn begin
         while true

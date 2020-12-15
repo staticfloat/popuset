@@ -1,0 +1,22 @@
+name = "Popuset"
+uuid = "2ced841b-cb4d-d2e1-4d8d-3e3a50bac170"
+authors = ["Elliot Saba <staticfloat@gmail.com>"]
+version = "0.1.0"
+
+[deps]
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+Libdl = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
+Opus = "0af1e411-0638-4d6d-bb05-ed1900b440d5"
+PortAudio = "80ea8bcb-4634-5cb3-8ee8-a132660d1d2d"
+SampledSignals = "bd7594eb-a658-542f-9e75-4c4d8908c167"
+TimeZones = "f269a46b-ccf7-5d73-abea-4c690281aa53"
+Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
+ZMQ = "c2297ded-f4af-51ae-bb23-16f91089e4e1"
+libsndfile_jll = "5bf562c0-5a39-5b4f-b979-f64ac885830c"
+popuset_shim_jll = "cda8bdfc-82c4-5e04-8e46-2d351740fb6c"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]

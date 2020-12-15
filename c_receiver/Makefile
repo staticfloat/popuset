@@ -1,6 +1,6 @@
 all: build/receiver
 
-SOURCES = $(foreach S,$(wildcard receiver/*.c),$(notdir $(S)))
+SOURCES = $(foreach S,$(wildcard *.c),$(notdir $(S)))
 OBJECTS = $(patsubst %.c,build/%.o,$(SOURCES))
 CFLAGS = -O2 -g
 LDFLAGS = -lportaudio -lopus -lm -lpthread
@@ -8,7 +8,7 @@ LDFLAGS = -lportaudio -lopus -lm -lpthread
 build:
 	mkdir -p $@
 
-build/%.o: receiver/%.c receiver/receiver.h | build
+build/%.o: %.c receiver.h | build
 	$(CXX) -c  -o $@ $(CFLAGS) $<
 
 build/receiver: $(OBJECTS)
